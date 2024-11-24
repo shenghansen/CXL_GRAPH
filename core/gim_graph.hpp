@@ -37,6 +37,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <algorithm>
 
 #include "core/atomic.hpp"
 #include "core/bitmap.hpp"
@@ -45,7 +46,9 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include "core/mpi.hpp"
 #include "core/time.hpp"
 #include "core/type.hpp"
-#include <algorithm>
+#include "communicate.h"
+
+
 
 #define THREDAS 32
 #define NUMA 2
@@ -180,6 +183,10 @@ public:
     MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
     MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
 
+    //GIM
+    CXL_SHM* cxl_shm;
+    GIM_comm* gim_comm;
+
     Graph() {
         // threads = numa_num_configured_cpus();
         // sockets = numa_num_configured_nodes();
@@ -188,7 +195,6 @@ public:
         threads = THREDAS;
         sockets = NUMA;
         threads_per_socket = threads / sockets;
-
         init();
     }
     // for simulate
@@ -301,7 +307,10 @@ public:
     void init() {
         MPI_Comm_rank(MPI_COMM_WORLD, &partition_id);
         MPI_Comm_size(MPI_COMM_WORLD, &partitions);
-        // 启动MPI
+
+        cxl_shm=new CXL_SHM(partitions,partition_id);
+        gim_comm =new GIM_comm(cxl_shm);
+
         edge_data_size = std::is_same<EdgeData, Empty>::value ? 0 : sizeof(EdgeData);
         unit_size = sizeof(VertexId) + edge_data_size;
         edge_unit_size = sizeof(VertexId) + unit_size;

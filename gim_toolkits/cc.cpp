@@ -17,7 +17,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "core/graph.hpp"
+#include "core/gim_graph.hpp"
 double exec_time = 0;
 
 void compute(Graph<Empty> * graph) {

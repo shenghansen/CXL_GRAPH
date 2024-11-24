@@ -17,7 +17,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "core/graph.hpp"
+#include "core/gim_graph.hpp"
 
 #define COMPACT 0
 double exec_time = 0;
