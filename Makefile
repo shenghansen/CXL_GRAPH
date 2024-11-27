@@ -1,6 +1,6 @@
 ROOT_DIR= $(shell pwd)
 TARGETS= toolkits/bc toolkits/bfs toolkits/cc toolkits/pagerank toolkits/sssp
-MACROS= 
+MACROS= -DCXL_SHM
 # MACROS= -D PRINT_DEBUG_MESSAGES
 
 MPICXX= $(OpenMPI_DIR)/bin/mpicxx

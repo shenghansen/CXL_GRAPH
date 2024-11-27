@@ -51,7 +51,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 
 #define THREDAS 32
-#define NUMA 2
+#define NUMA 1
 #define REMOTE_NUMA 7
 
 /* shenghansen:for test */
@@ -71,7 +71,32 @@ struct ThreadState {
     VertexId end;
     ThreadStatus status;
 };
+/* origin MesaageBUffer */
+// struct MessageBuffer {
+//     size_t capacity;
+//     int count;   // the actual size (i.e. bytes) should be sizeof(element) * count
+//     char* data;
+//     MessageBuffer() {
+//         capacity = 0;
+//         count = 0;
+//         data = NULL;
+//     }
+//     void init(int socket_id) {
+//         capacity = 4096;
+//         count = 0;
+//         data = (char*)numa_alloc_onnode(capacity, socket_id);
+//     }
+//     void resize(size_t new_capacity) {
+//         if (new_capacity > capacity) {
+//             char* new_data = (char*)numa_realloc(data, capacity, new_capacity);
+//             assert(new_data != NULL);
+//             data = new_data;
+//             capacity = new_capacity;
+//         }
+//     }
+// };
 
+/* gim version */
 struct MessageBuffer {
     size_t capacity;
     int count;   // the actual size (i.e. bytes) should be sizeof(element) * count
@@ -180,12 +205,16 @@ public:
 
     int current_send_part_id;
     // MessageBuffer的二维数组，MessageBuffer是自定义数组，初始化时不分配空间，通过resize函数numa_aware分配空间
-    MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
-    MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
+    // MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
+    // MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
 
     //GIM
     CXL_SHM* cxl_shm;
     GIM_comm* gim_comm;
+    MessageBuffer****
+        send_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
+    MessageBuffer****
+        recv_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -374,22 +403,49 @@ public:
         // //   if (partition_id==0)
         //    printf("partition:%d,logical thread:%d,physical thread:%d\n",partition_id,omp_get_thread_num(),get_thread_core_id());
         //  }
+/* origin send_buffer init */
+        // send_buffer = new MessageBuffer**[partitions];
+        // recv_buffer = new MessageBuffer**[partitions];
+        // for (int i = 0; i < partitions; i++) {
+        //     send_buffer[i] = new MessageBuffer*[sockets];
+        //     recv_buffer[i] = new MessageBuffer*[sockets];
+        //     // for simulate
+        //     for (int s_i = 0; s_i < sockets; s_i++) {
+        //         send_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
+        //                                                                 s_i + partition_id * NUMA);
+        //         send_buffer[i][s_i]->init(s_i);
+        //         recv_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
+        //                                                                 s_i + partition_id * NUMA);
+        //         recv_buffer[i][s_i]->init(s_i);
+        //     }
+        // }
 
-        send_buffer = new MessageBuffer**[partitions];
-        recv_buffer = new MessageBuffer**[partitions];
+        /* gim version send_buffer init */
+        send_buffer = new MessageBuffer***[partitions];
+        recv_buffer = new MessageBuffer***[partitions];
         for (int i = 0; i < partitions; i++) {
-            send_buffer[i] = new MessageBuffer*[sockets];
-            recv_buffer[i] = new MessageBuffer*[sockets];
-            // for simulate
-            for (int s_i = 0; s_i < sockets; s_i++) {
-                send_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
-                                                                        s_i + partition_id * NUMA);
-                send_buffer[i][s_i]->init(s_i);
-                recv_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
-                                                                        s_i + partition_id * NUMA);
-                recv_buffer[i][s_i]->init(s_i);
+            send_buffer[i] = new MessageBuffer**[partitions];
+            recv_buffer[i] = new MessageBuffer**[partitions];
+            for (size_t j = 0; j < partitions; j++)
+            {
+                send_buffer[i][j] = new MessageBuffer*[sockets];
+                recv_buffer[i][j] = new MessageBuffer*[sockets];
+                    // for simulate
+                    for (int s_i = 0; s_i < sockets; s_i++) {
+                        send_buffer[i][j][s_i] = (MessageBuffer*)numa_alloc_onnode(
+                            sizeof(MessageBuffer), s_i + partition_id * NUMA);
+                        send_buffer[i][j][s_i]->init(s_i);
+                        recv_buffer[i][j][s_i] = (MessageBuffer*)numa_alloc_onnode(
+                            sizeof(MessageBuffer), s_i + partition_id * NUMA);
+                        recv_buffer[i][j][s_i]->init(s_i);
+                    }
+                }
             }
+
         }
+
+
+
         // send_buffer和recv_buffer是二维的，第一维分区，第二维socket，每个socket内的线程还有自己的local_send_buffer
         alpha = 8 * (partitions - 1);
 

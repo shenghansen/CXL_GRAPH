@@ -43,3 +43,9 @@ sudo_gdb.sh
 output.*
 
 rankfile
+
+bc 
+cc 
+bfs
+pagerank
+sssp

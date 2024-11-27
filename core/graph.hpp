@@ -17,26 +17,27 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #ifndef GRAPH_HPP
 #define GRAPH_HPP
 
+#include <cerrno>
 #include <cstddef>
 #include <fcntl.h>
+#include <functional>
 #include <malloc.h>
+#include <mutex>
 #include <numa.h>
 #include <omp.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
-#include <functional>
-#include <mutex>
-#include <pthread.h>
-#include <sched.h>
 #include <string>
+#include <sys/mman.h>
 #include <thread>
+#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "core/atomic.hpp"
 #include "core/bitmap.hpp"
@@ -48,8 +49,8 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <algorithm>
 
 #define THREDAS 32
-#define NUMA 2
-#define REMOTE_NUMA 7
+#define NUMA 1
+#define REMOTE_NUMA 4
 
 /* shenghansen:for test */
 double allreduce_time = 0;
@@ -86,6 +87,16 @@ struct MessageBuffer {
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
             char* new_data = (char*)numa_realloc(data, capacity, new_capacity);
+            if (new_data==nullptr)
+            {
+                printf("%p  ",data);
+                std::cout<<" "<<capacity<<" "<<new_capacity<<std::endl;
+                
+                std::cerr << "numa_realloc failed with errno " << errno << ": " << strerror(errno)
+                          << std::endl;
+                printf("numa_num_task_nodes() %d\n", numa_num_task_nodes());
+            }
+            
             assert(new_data != NULL);
             data = new_data;
             capacity = new_capacity;
@@ -322,6 +333,7 @@ public:
             nodestring[index++] = '0' + s_i;
         }
         nodestring[index++] = '\0';
+        printf("nodestring:%s\n", nodestring);
         struct bitmask* nodemask = numa_parse_nodestring(nodestring);
         numa_set_interleave_mask(nodemask);
         // 根据nodestring得到numa配置，然后在这几个numa上交织分配内存
