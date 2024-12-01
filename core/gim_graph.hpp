@@ -28,6 +28,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <functional>
 #include <mutex>
 #include <pthread.h>
@@ -37,8 +38,8 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <algorithm>
 
+#include "communicate.h"
 #include "core/atomic.hpp"
 #include "core/bitmap.hpp"
 #include "core/constants.hpp"
@@ -46,13 +47,14 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include "core/mpi.hpp"
 #include "core/time.hpp"
 #include "core/type.hpp"
-#include "communicate.h"
 
 
 
 #define THREDAS 32
-#define NUMA 1
+#define NUMA 2
 #define REMOTE_NUMA 7
+
+#define CAPACITY (1ull * 1024 * 1024 * 1024)
 
 /* shenghansen:for test */
 double allreduce_time = 0;
@@ -72,31 +74,6 @@ struct ThreadState {
     ThreadStatus status;
 };
 /* origin MesaageBUffer */
-// struct MessageBuffer {
-//     size_t capacity;
-//     int count;   // the actual size (i.e. bytes) should be sizeof(element) * count
-//     char* data;
-//     MessageBuffer() {
-//         capacity = 0;
-//         count = 0;
-//         data = NULL;
-//     }
-//     void init(int socket_id) {
-//         capacity = 4096;
-//         count = 0;
-//         data = (char*)numa_alloc_onnode(capacity, socket_id);
-//     }
-//     void resize(size_t new_capacity) {
-//         if (new_capacity > capacity) {
-//             char* new_data = (char*)numa_realloc(data, capacity, new_capacity);
-//             assert(new_data != NULL);
-//             data = new_data;
-//             capacity = new_capacity;
-//         }
-//     }
-// };
-
-/* gim version */
 struct MessageBuffer {
     size_t capacity;
     int count;   // the actual size (i.e. bytes) should be sizeof(element) * count
@@ -107,13 +84,39 @@ struct MessageBuffer {
         data = NULL;
     }
     void init(int socket_id) {
-        capacity = 4096;
+        capacity = 1024 * 1024;
         count = 0;
         data = (char*)numa_alloc_onnode(capacity, socket_id);
     }
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
             char* new_data = (char*)numa_realloc(data, capacity, new_capacity);
+            assert(new_data != NULL);
+            data = new_data;
+            capacity = new_capacity;
+        }
+    }
+};
+
+/* gim version */
+struct GIMMessageBuffer {
+    CXL_SHM* cxl_shm;
+    int host_id;
+    int numa_id;
+    size_t capacity;
+    size_t count;   // the actual size (i.e. bytes) should be sizeof(element) * count
+    char* data;
+    GIMMessageBuffer(CXL_SHM* cxl_shm, int id, int numa_id) {
+        this->cxl_shm = cxl_shm;
+        this->host_id = id;
+        this->numa_id = numa_id;
+        capacity = CAPACITY;
+        count = 0;
+        data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
+    }
+    void resize(size_t new_capacity) {
+        if (new_capacity > capacity) {
+            char* new_data = (char*)cxl_shm->GIM_malloc(new_capacity, host_id, numa_id);
             assert(new_data != NULL);
             data = new_data;
             capacity = new_capacity;
@@ -205,16 +208,16 @@ public:
 
     int current_send_part_id;
     // MessageBuffer的二维数组，MessageBuffer是自定义数组，初始化时不分配空间，通过resize函数numa_aware分配空间
-    // MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
-    // MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
+    MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
+    MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
 
-    //GIM
+    // GIM
     CXL_SHM* cxl_shm;
     GIM_comm* gim_comm;
-    MessageBuffer****
-        send_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
-    MessageBuffer****
-        recv_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
+    GIMMessageBuffer****
+        gim_send_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
+    GIMMessageBuffer****
+        gim_recv_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -234,7 +237,6 @@ public:
         int physical_thread_id = omp_get_thread_num();
         return physical_thread_id % (partition_id * threads);
     }
-
     void set_thread_affinity(int thread_id) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
@@ -254,8 +256,6 @@ public:
         }
         return -1;   // 如果没有找到，返回 -1（错误标志）
     }
-
-
     // 根据threadid得知在哪个numa节点上
     inline int get_socket_id(int thread_id) { return thread_id / threads_per_socket; }
     // 根据threadid得知在numa上的第几个thread，即offset
@@ -337,8 +337,8 @@ public:
         MPI_Comm_rank(MPI_COMM_WORLD, &partition_id);
         MPI_Comm_size(MPI_COMM_WORLD, &partitions);
 
-        cxl_shm=new CXL_SHM(partitions,partition_id);
-        gim_comm =new GIM_comm(cxl_shm);
+        cxl_shm = new CXL_SHM(partitions, partition_id);
+        gim_comm = new GIM_comm(cxl_shm);
 
         edge_data_size = std::is_same<EdgeData, Empty>::value ? 0 : sizeof(EdgeData);
         unit_size = sizeof(VertexId) + edge_data_size;
@@ -401,48 +401,44 @@ public:
         //  for (int t_i = 0; t_i < threads; t_i++) {
         //   // set_thread_affinity(t_i+partition_id*threads);
         // //   if (partition_id==0)
-        //    printf("partition:%d,logical thread:%d,physical thread:%d\n",partition_id,omp_get_thread_num(),get_thread_core_id());
+        //    printf("partition:%d,logical thread:%d,physical
+        //    thread:%d\n",partition_id,omp_get_thread_num(),get_thread_core_id());
         //  }
-/* origin send_buffer init */
-        // send_buffer = new MessageBuffer**[partitions];
-        // recv_buffer = new MessageBuffer**[partitions];
-        // for (int i = 0; i < partitions; i++) {
-        //     send_buffer[i] = new MessageBuffer*[sockets];
-        //     recv_buffer[i] = new MessageBuffer*[sockets];
-        //     // for simulate
-        //     for (int s_i = 0; s_i < sockets; s_i++) {
-        //         send_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
-        //                                                                 s_i + partition_id * NUMA);
-        //         send_buffer[i][s_i]->init(s_i);
-        //         recv_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
-        //                                                                 s_i + partition_id * NUMA);
-        //         recv_buffer[i][s_i]->init(s_i);
-        //     }
-        // }
+
+        /* origin send_buffer init */
+        send_buffer = new MessageBuffer**[partitions];
+        recv_buffer = new MessageBuffer**[partitions];
+        for (int i = 0; i < partitions; i++) {
+            send_buffer[i] = new MessageBuffer*[sockets];
+            recv_buffer[i] = new MessageBuffer*[sockets];
+            // for simulate
+            for (int s_i = 0; s_i < sockets; s_i++) {
+                send_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
+                                                                        s_i + partition_id * NUMA);
+                send_buffer[i][s_i]->init(s_i);
+                recv_buffer[i][s_i] = (MessageBuffer*)numa_alloc_onnode(sizeof(MessageBuffer),
+                                                                        s_i + partition_id * NUMA);
+                recv_buffer[i][s_i]->init(s_i);
+            }
+        }
 
         /* gim version send_buffer init */
-        send_buffer = new MessageBuffer***[partitions];
-        recv_buffer = new MessageBuffer***[partitions];
+        gim_send_buffer = new GIMMessageBuffer***[partitions];
+        gim_recv_buffer = new GIMMessageBuffer***[partitions];
         for (int i = 0; i < partitions; i++) {
-            send_buffer[i] = new MessageBuffer**[partitions];
-            recv_buffer[i] = new MessageBuffer**[partitions];
-            for (size_t j = 0; j < partitions; j++)
-            {
-                send_buffer[i][j] = new MessageBuffer*[sockets];
-                recv_buffer[i][j] = new MessageBuffer*[sockets];
-                    // for simulate
-                    for (int s_i = 0; s_i < sockets; s_i++) {
-                        send_buffer[i][j][s_i] = (MessageBuffer*)numa_alloc_onnode(
-                            sizeof(MessageBuffer), s_i + partition_id * NUMA);
-                        send_buffer[i][j][s_i]->init(s_i);
-                        recv_buffer[i][j][s_i] = (MessageBuffer*)numa_alloc_onnode(
-                            sizeof(MessageBuffer), s_i + partition_id * NUMA);
-                        recv_buffer[i][j][s_i]->init(s_i);
-                    }
+            gim_send_buffer[i] = new GIMMessageBuffer**[partitions];
+            gim_recv_buffer[i] = new GIMMessageBuffer**[partitions];
+            for (size_t j = 0; j < partitions; j++) {
+                gim_send_buffer[i][j] = new GIMMessageBuffer*[sockets];
+                gim_recv_buffer[i][j] = new GIMMessageBuffer*[sockets];
+                // for simulate
+                for (int s_i = 0; s_i < sockets; s_i++) {
+                    gim_send_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
+                    gim_recv_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
                 }
             }
-
         }
+
 
 
 
@@ -1397,7 +1393,7 @@ public:
                         VertexId src = recv_buffer[e_i].src;
                         VertexId dst = recv_buffer[e_i].dst;
                         //如果其他节点的发过来的边里面，dst在本节点的话，就更新本节点内mirror点的bitmap
-                        //index(应该有的是mirror，有的是master，只能确定dst一定是master)
+                        // index(应该有的是mirror，有的是master，只能确定dst一定是master)
                         assert(dst >= partition_offset[partition_id] &&
                                dst < partition_offset[partition_id + 1]);
                         int dst_part = get_local_partition_id(dst);   //找到点所在在numa的id
@@ -2121,13 +2117,26 @@ public:
 
     //将本地线程的发送缓冲区的数据刷新到全局发送缓冲区
     //全局的send_buffer怎么知道local_send_bufferd的位置呢，不是每个大小都是 local_send_buffer_limit
+    // template<typename M> void flush_local_send_buffer(int t_i) {
+    //     int s_i = get_socket_id(t_i);   //线程在那个socket
+    //     int pos = __sync_fetch_and_add(
+    //         &send_buffer[current_send_part_id][s_i]->count,
+    //         local_send_buffer[t_i]
+    //             ->count);   //通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
+    //     memcpy(send_buffer[current_send_part_id][s_i]->data + sizeof(MsgUnit<M>) * pos,
+    //            local_send_buffer[t_i]->data,
+    //            sizeof(MsgUnit<M>) * local_send_buffer[t_i]->count);
+    //     local_send_buffer[t_i]->count = 0;
+    // }
+
     template<typename M> void flush_local_send_buffer(int t_i) {
         int s_i = get_socket_id(t_i);   //线程在那个socket
         int pos = __sync_fetch_and_add(
-            &send_buffer[current_send_part_id][s_i]->count,
+            &gim_send_buffer[partition_id][current_send_part_id][s_i]->count,
             local_send_buffer[t_i]
                 ->count);   //通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
-        memcpy(send_buffer[current_send_part_id][s_i]->data + sizeof(MsgUnit<M>) * pos,
+        memcpy(gim_send_buffer[partition_id][current_send_part_id][s_i]->data +
+                   sizeof(MsgUnit<M>) * pos,
                local_send_buffer[t_i]->data,
                sizeof(MsgUnit<M>) * local_send_buffer[t_i]->count);
         local_send_buffer[t_i]->count = 0;
@@ -2177,31 +2186,50 @@ public:
         if (sparse) {
             for (int i = 0; i < partitions; i++) {   //稀疏模式每个host要向外发送数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    recv_buffer[i][s_i]->resize(
-                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
-                    send_buffer[partition_id][s_i]->resize(
-                        sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
-                    send_buffer[partition_id][s_i]->count = 0;
-                    recv_buffer[i][s_i]->count = 0;
+                    if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                                sockets >CAPACITY ||
+                        sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
+                        ERROR("out of CAPACITY");
+                        
+                    }
+
+                    // recv_buffer[i][s_i]->resize(
+                    //     sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    //     sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                    // send_buffer[partition_id][s_i]->resize(
+                    //     sizeof(MsgUnit<M>) * owned_vertices *
+                    //     sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                    // send_buffer[partition_id][s_i]->count = 0;
+                    // recv_buffer[i][s_i]->count = 0;
+
+                    gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
+                    gim_recv_buffer[partition_id][i][s_i]->count = 0;
+
                     send_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
                     recv_buffer_size += sizeof(MsgUnit<M>) *
                                         (partition_offset[i + 1] - partition_offset[i]) * sockets;
                 }
             }
-            // change send_buffer here
-            send_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
         } else {
             for (int i = 0; i < partitions; i++) {   //稠密模式每个host要接受数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
-                                                sockets);   //跟上面相反
-                    send_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) *
-                                                (partition_offset[i + 1] - partition_offset[i]) *
-                                                sockets);
-                    send_buffer[i][s_i]->count = 0;
-                    recv_buffer[i][s_i]->count = 0;
+                    if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                                sockets >
+                            CAPACITY ||
+                        sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
+                        ERROR("out of CAPACITY");
+                    }
+
+                    // recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
+                    //                             sockets);   //跟上面相反
+                    // send_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) *
+                    //                             (partition_offset[i + 1] - partition_offset[i]) *
+                    //                             sockets);
+                    // send_buffer[i][s_i]->count = 0;
+                    // recv_buffer[i][s_i]->count = 0;
+
+                    gim_send_buffer[partition_id][i][s_i]->count = 0;
+                    gim_recv_buffer[partition_id][i][s_i]->count = 0;
                     recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
                     send_buffer_size += sizeof(MsgUnit<M>) *
                                         (partition_offset[i + 1] - partition_offset[i]) * sockets;
@@ -2242,7 +2270,6 @@ public:
                     word = word >> 1;
                 }
             }
-
 #pragma omp parallel for
             for (int t_i = 0; t_i < threads; t_i++) {
                 flush_local_send_buffer<M>(t_i);
@@ -2259,12 +2286,19 @@ public:
                     int i = (partition_id - step + partitions) %
                             partitions;   //确保i进程是除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {   //遍历所有socket
-                        MPI_Send(send_buffer[partition_id][s_i]->data,
-                                 sizeof(MsgUnit<M>) * send_buffer[partition_id][s_i]->count,
-                                 MPI_CHAR,
-                                 i,
-                                 PassMessage,
-                                 MPI_COMM_WORLD);
+                        // MPI_Send(send_buffer[partition_id][s_i]->data,
+                        //          sizeof(MsgUnit<M>) * send_buffer[partition_id][s_i]->count,
+                        //          MPI_CHAR,
+                        //          i,
+                        //          PassMessage,
+                        //          MPI_COMM_WORLD);
+                        gim_comm->GIM_Send(
+                            gim_send_buffer[partition_id][partition_id][s_i]->data,
+                            sizeof(MsgUnit<M>) *
+                                gim_send_buffer[partition_id][partition_id][s_i]->count,
+                            i,
+                            0,
+                            gim_recv_buffer[i][partition_id][s_i]->data);
                     }
                 }
             });
@@ -2273,16 +2307,20 @@ public:
                     int i = (partition_id + step) % partitions;   //除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {     //遍历所有socket
                         MPI_Status recv_status;
-                        MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
-                        MPI_Get_count(&recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
-                        MPI_Recv(recv_buffer[i][s_i]->data,
-                                 recv_buffer[i][s_i]->count,
-                                 MPI_CHAR,
-                                 i,
-                                 PassMessage,
-                                 MPI_COMM_WORLD,
-                                 MPI_STATUS_IGNORE);
-                        recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
+                        // MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
+                        // MPI_Get_count(&recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
+                        // MPI_Recv(recv_buffer[i][s_i]->data,
+                        //          recv_buffer[i][s_i]->count,
+                        //          MPI_CHAR,
+                        //          i,
+                        //          PassMessage,
+                        //          MPI_COMM_WORLD,
+                        //          MPI_STATUS_IGNORE);
+                        // recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
+                        gim_comm->GIM_Probe(i,0);
+                        gim_comm->GIM_Get_count(i,0,gim_recv_buffer[partition_id][i][s_i]->count);
+                        gim_comm->GIM_Recv(gim_recv_buffer[partition_id][i][s_i]->count,i,0);
+                        gim_recv_buffer[partition_id][i][s_i]->count /= sizeof(MsgUnit<M>);
                     }
                     recv_queue[recv_queue_size] = i;
                     recv_queue_mutex.lock();
@@ -2291,7 +2329,6 @@ public:
                 }
             });
             //现在数据都到每个host的recv_buffer里了
-
             for (int step = 0; step < partitions; step++) {   //遍历所有分区，这里是串行的
                 while (true) {
                     recv_queue_mutex.lock();
@@ -2301,16 +2338,19 @@ public:
                     __asm volatile("pause" ::: "memory");
                 }
                 int i = recv_queue[step];
-                MessageBuffer** used_buffer;
+                // MessageBuffer** used_buffer;
+                GIMMessageBuffer** used_buffer;
                 if (i == partition_id) {
-                    used_buffer = send_buffer[i];   // MessageBuffer**
+                    // used_buffer = send_buffer[i];   // MessageBuffer**
+                    used_buffer = gim_send_buffer[partition_id][i];
                 } else {
-                    used_buffer = recv_buffer[i];
+                    // used_buffer = recv_buffer[i];
+                    used_buffer = gim_recv_buffer[partition_id][i];
                 }
                 for (int s_i = 0; s_i < sockets; s_i++) {   //遍历所有socket
-                    MsgUnit<M>* buffer =
-                        (MsgUnit<M>*)used_buffer[s_i]->data;   //将(MessageBuffer*)->data转为(MsgUnit<M>
-                                                               //s_i表示第s_i个socket的buffer
+                    MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]
+                                             ->data;   //将(MessageBuffer*)->data转为(MsgUnit<M>
+                                                       // s_i表示第s_i个socket的buffer
                     size_t buffer_size =
                         used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
                                                    // s_i个socket的buffersize
@@ -2354,7 +2394,7 @@ public:
                                         v_i,
                                         msg_data,
                                         VertexAdjList<EdgeData>(   //遍历v_i在s_i
-                                                                   //socket内的出边的dst
+                                                                   // socket内的出边的dst
                                             outgoing_adj_list[s_i] +
                                                 outgoing_adj_index[s_i]
                                                                   [v_i],   // s_i内v_i的出边开始
@@ -2480,12 +2520,19 @@ public:
                     }
                     int i = send_queue[step];
                     for (int s_i = 0; s_i < sockets; s_i++) {
-                        MPI_Send(send_buffer[i][s_i]->data,
-                                 sizeof(MsgUnit<M>) * send_buffer[i][s_i]->count,
-                                 MPI_CHAR,
-                                 i,
-                                 PassMessage,
-                                 MPI_COMM_WORLD);
+                        // MPI_Send(send_buffer[i][s_i]->data,
+                        //          sizeof(MsgUnit<M>) * send_buffer[i][s_i]->count,
+                        //          MPI_CHAR,
+                        //          i,
+                        //          PassMessage,
+                        //          MPI_COMM_WORLD);
+                        gim_comm->GIM_Send(
+                            gim_send_buffer[partition_id][i][s_i]->data,
+                            sizeof(MsgUnit<M>) *
+                                gim_send_buffer[partition_id][i][s_i]->count,
+                            i,
+                            0,
+                            gim_recv_buffer[i][partition_id][s_i]->data);
                     }
                 }
             });
@@ -2499,17 +2546,26 @@ public:
                             [&](int i) {   // i是分区
                                 for (int s_i = 0; s_i < sockets; s_i++) {
                                     MPI_Status recv_status;
-                                    MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
-                                    MPI_Get_count(
-                                        &recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
-                                    MPI_Recv(recv_buffer[i][s_i]->data,
-                                             recv_buffer[i][s_i]->count,
-                                             MPI_CHAR,
-                                             i,
-                                             PassMessage,
-                                             MPI_COMM_WORLD,
-                                             MPI_STATUS_IGNORE);
-                                    recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
+                                    // MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
+                                    // MPI_Get_count(
+                                    //     &recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
+                                    // MPI_Recv(recv_buffer[i][s_i]->data,
+                                    //          recv_buffer[i][s_i]->count,
+                                    //          MPI_CHAR,
+                                    //          i,
+                                    //          PassMessage,
+                                    //          MPI_COMM_WORLD,
+                                    //          MPI_STATUS_IGNORE);
+                                    // recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
+
+
+                                    // gim_comm->GIM_Probe(i, 0);
+                                    gim_comm->GIM_Get_count(
+                                        i, 0, gim_recv_buffer[partition_id][i][s_i]->count);
+                                    gim_comm->GIM_Recv(
+                                        gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
+                                    gim_recv_buffer[partition_id][i][s_i]->count /=
+                                        sizeof(MsgUnit<M>);
                                 }
                             },
                             i);
@@ -2615,11 +2671,14 @@ public:
                     __asm volatile("pause" ::: "memory");
                 }   //接受完一个就启动计算
                 int i = recv_queue[step];
-                MessageBuffer** used_buffer;
+                // MessageBuffer** used_buffer;
+                GIMMessageBuffer** used_buffer;
                 if (i == partition_id) {
-                    used_buffer = send_buffer[i];
+                    // used_buffer = send_buffer[i];
+                    used_buffer = gim_send_buffer[partition_id][i];
                 } else {
-                    used_buffer = recv_buffer[i];
+                    // used_buffer = recv_buffer[i];
+                    used_buffer = gim_recv_buffer[partition_id][i];
                 }
                 //确定每个线程负责buffer的哪个部分
                 for (int t_i = 0; t_i < threads; t_i++) {

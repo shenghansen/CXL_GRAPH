@@ -38,9 +38,9 @@ void compute(Graph<Empty> * graph) {
   );
 
   for (int i_i=0;active_vertices>0;i_i++) {
-    // if (graph->partition_id==0) {
-    //   printf("active(%d)>=%u\n", i_i, active_vertices);
-    // }
+    if (graph->partition_id==0) {
+      printf("active(%d)>=%u\n", i_i, active_vertices);
+    }
     active_out->clear();
     active_vertices = graph->process_edges<VertexId,VertexId>(
       [&](VertexId src){

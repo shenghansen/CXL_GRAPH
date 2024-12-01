@@ -46,9 +46,9 @@ void compute(Graph<Empty> * graph, int iterations) {
   delta /= graph->vertices;
 
   for (int i_i=0;i_i<iterations;i_i++) {
-    // if (graph->partition_id==0) {
-    //   printf("delta(%d)=%lf\n", i_i, delta);
-    // }
+    if (graph->partition_id==0) {
+      printf("delta(%d)=%lf\n", i_i, delta);
+    }
     graph->fill_vertex_array(next, (double)0);
     //稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
     graph->process_edges<int,double>(

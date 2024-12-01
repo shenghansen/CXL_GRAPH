@@ -50,7 +50,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 #define THREDAS 32
 #define NUMA 1
-#define REMOTE_NUMA 4
+#define REMOTE_NUMA 8
 
 /* shenghansen:for test */
 double allreduce_time = 0;
@@ -80,7 +80,7 @@ struct MessageBuffer {
         data = NULL;
     }
     void init(int socket_id) {
-        capacity = 4096;
+        capacity = 8ul*1024*1024*1024;
         count = 0;
         data = (char*)numa_alloc_onnode(capacity, socket_id);
     }

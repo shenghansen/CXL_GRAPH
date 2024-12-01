@@ -46,9 +46,9 @@ void compute(Graph<Empty> * graph, VertexId root) {
     // printf("forward\n");
   }
   for (i_i=0;active_vertices>0;i_i++) {
-    // if (graph->partition_id==0) {
-    //   printf("active(%d)>=%u\n", i_i, active_vertices);
-    // }
+    if (graph->partition_id==0) {
+      printf("active(%d)>=%u\n", i_i, active_vertices);
+    }
     VertexSubset * active_out = graph->alloc_vertex_subset();
     active_out->clear();
     graph->process_edges<VertexId,double>(
