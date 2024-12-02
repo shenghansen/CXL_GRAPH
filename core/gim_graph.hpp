@@ -51,7 +51,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 
 #define THREDAS 32
-#define NUMA 2
+#define NUMA SNC
 #define REMOTE_NUMA 7
 
 #define CAPACITY (1ull * 1024 * 1024 * 1024)
@@ -106,17 +106,22 @@ struct GIMMessageBuffer {
     size_t capacity;
     size_t count;   // the actual size (i.e. bytes) should be sizeof(element) * count
     char* data;
-    GIMMessageBuffer(CXL_SHM* cxl_shm, int id, int numa_id) {
+    GIMMessageBuffer(CXL_SHM* cxl_shm, int host_id, int numa_id) {
         this->cxl_shm = cxl_shm;
-        this->host_id = id;
+        this->host_id = host_id;
         this->numa_id = numa_id;
-        capacity = CAPACITY;
+        capacity = 1024 * 1024;
         count = 0;
+        data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
+    }
+    void init(size_t size) {
+        capacity = size;
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
     }
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
-            char* new_data = (char*)cxl_shm->GIM_malloc(new_capacity, host_id, numa_id);
+            ERROR("out of capacity");
+            char* new_data = (char*)cxl_shm->GIM_malloc(new_capacity * 10, host_id, numa_id);
             assert(new_data != NULL);
             data = new_data;
             capacity = new_capacity;
@@ -421,8 +426,21 @@ public:
                 recv_buffer[i][s_i]->init(s_i);
             }
         }
+        // send_buffer和recv_buffer是二维的，第一维分区，第二维socket，每个socket内的线程还有自己的local_send_buffer
+        alpha = 8 * (partitions - 1);
+
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
+    void init_gim_buffer() {
 
         /* gim version send_buffer init */
+        size_t max_owned_vertices = 0;
+        for (size_t i = 0; i < partitions; i++) {
+            size_t p_i_owned_v = partition_offset[i + 1] - partition_offset[i];
+            max_owned_vertices =
+                p_i_owned_v > max_owned_vertices ? p_i_owned_v : max_owned_vertices;
+        }
         gim_send_buffer = new GIMMessageBuffer***[partitions];
         gim_recv_buffer = new GIMMessageBuffer***[partitions];
         for (int i = 0; i < partitions; i++) {
@@ -434,20 +452,15 @@ public:
                 // for simulate
                 for (int s_i = 0; s_i < sockets; s_i++) {
                     gim_send_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
+                    gim_send_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
+                        sockets);
                     gim_recv_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
+                    gim_recv_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
+                                                     sockets);
                 }
             }
         }
-
-
-
-
-        // send_buffer和recv_buffer是二维的，第一维分区，第二维socket，每个socket内的线程还有自己的local_send_buffer
-        alpha = 8 * (partitions - 1);
-
-        MPI_Barrier(MPI_COMM_WORLD);
     }
-
     double print_total_allreduce() {
         return total_allreduce_time;
     }
@@ -1104,7 +1117,10 @@ public:
         tune_chunks();
         tuned_chunks_sparse = tuned_chunks_dense;
 
-        prep_time += MPI_Wtime();
+        //gim_buffer
+        init_gim_buffer();
+
+            prep_time += MPI_Wtime();
 
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
@@ -1934,7 +1950,8 @@ public:
         transpose();     // exchange tuned_chunks_dense and tuned_chunks_sparse
         // tuned_chunks_sparse = tuned_chunks_dense
         tune_chunks();   // tuned_chunks_dense init
-
+        // gim_buffer
+        init_gim_buffer();
         prep_time += MPI_Wtime();
 
 #ifdef PRINT_DEBUG_MESSAGES
@@ -2186,12 +2203,13 @@ public:
         if (sparse) {
             for (int i = 0; i < partitions; i++) {   //稀疏模式每个host要向外发送数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                                sockets >CAPACITY ||
-                        sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
-                        ERROR("out of CAPACITY");
-                        
-                    }
+                    // if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    //             sockets >CAPACITY ||
+                    //     sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
+
+                    //     ERROR("out of CAPACITY");
+
+                    // }
 
                     // recv_buffer[i][s_i]->resize(
                     //     sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
@@ -2202,6 +2220,12 @@ public:
                     // send_buffer[partition_id][s_i]->count = 0;
                     // recv_buffer[i][s_i]->count = 0;
 
+                    gim_recv_buffer[partition_id][i][s_i]->resize(
+                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                    gim_send_buffer[partition_id][partition_id][s_i]->resize(
+                        sizeof(MsgUnit<M>) * owned_vertices *
+                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
 
@@ -2213,12 +2237,12 @@ public:
         } else {
             for (int i = 0; i < partitions; i++) {   //稠密模式每个host要接受数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                                sockets >
-                            CAPACITY ||
-                        sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
-                        ERROR("out of CAPACITY");
-                    }
+                    // if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    //             sockets >
+                    //         CAPACITY ||
+                    //     sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
+                    //     ERROR("out of CAPACITY");
+                    // }
 
                     // recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
                     //                             sockets);   //跟上面相反
@@ -2228,6 +2252,12 @@ public:
                     // send_buffer[i][s_i]->count = 0;
                     // recv_buffer[i][s_i]->count = 0;
 
+                    gim_recv_buffer[partition_id][i][s_i]->resize(
+                        sizeof(MsgUnit<M>) * owned_vertices *
+                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                    gim_send_buffer[partition_id][partition_id][s_i]->resize(
+                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     gim_send_buffer[partition_id][i][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
                     recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
@@ -2317,9 +2347,9 @@ public:
                         //          MPI_COMM_WORLD,
                         //          MPI_STATUS_IGNORE);
                         // recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
-                        gim_comm->GIM_Probe(i,0);
-                        gim_comm->GIM_Get_count(i,0,gim_recv_buffer[partition_id][i][s_i]->count);
-                        gim_comm->GIM_Recv(gim_recv_buffer[partition_id][i][s_i]->count,i,0);
+                        // gim_comm->GIM_Probe(i, 0);
+                        gim_comm->GIM_Get_count(i, 0, gim_recv_buffer[partition_id][i][s_i]->count);
+                        gim_comm->GIM_Recv(gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
                         gim_recv_buffer[partition_id][i][s_i]->count /= sizeof(MsgUnit<M>);
                     }
                     recv_queue[recv_queue_size] = i;
@@ -2528,8 +2558,7 @@ public:
                         //          MPI_COMM_WORLD);
                         gim_comm->GIM_Send(
                             gim_send_buffer[partition_id][i][s_i]->data,
-                            sizeof(MsgUnit<M>) *
-                                gim_send_buffer[partition_id][i][s_i]->count,
+                            sizeof(MsgUnit<M>) * gim_send_buffer[partition_id][i][s_i]->count,
                             i,
                             0,
                             gim_recv_buffer[i][partition_id][s_i]->data);
