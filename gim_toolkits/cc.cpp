@@ -19,7 +19,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 
 #include "core/gim_graph.hpp"
 double exec_time = 0;
-
+//每个联通分量共享相同的标识（连通分量中最小点的标号），遍历点直到稳定
 void compute(Graph<Empty> * graph) {
   exec_time -= get_time();
   
@@ -27,7 +27,7 @@ void compute(Graph<Empty> * graph) {
   VertexId * label = graph->alloc_vertex_array<VertexId>();
   VertexSubset * active_in = graph->alloc_vertex_subset();
   active_in->fill();
-  VertexSubset * active_out = graph->alloc_vertex_subset();
+  VertexSubset * active_out = graph->alloc_vertex_subset();//下次要遍历的点
 
   VertexId active_vertices = graph->process_vertices<VertexId>(//用来更新label
     [&](VertexId vtx){

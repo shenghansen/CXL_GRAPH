@@ -1,8 +1,8 @@
 #!/bin/bash
 commands=("./build/pagerank" "./build/bfs" "./build/cc" "./build/sssp" "./build/bc")
 # commands=("./toolkits/pagerank" "./toolkits/bfs" "./toolkits/cc" "./toolkits/sssp" "./toolkits/bc")
-args=( "../data/twitter-2010Bin 41652230 1" "../data/enwiki-2013in 4206785 1" "../data/uk-2007Bin 105896555 1"  "../data/rMat24Bin 16800000 10" "../data/rMat27Bin 134000000 1")
-
+args=( "../data/twitter-2010Bin 41652230 1" "../data/enwiki-2013in 4206785 1" "../data/uk-2007Bin 105896555 1"   "../data/rMat27Bin 134000000 1")
+#"../data/rMat24Bin 16800000 10"
 
 num_commands=${#commands[@]}
 num_args=${#args[@]}
