@@ -52,7 +52,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 #define THREDAS 32
 #define NUMA SNC
-#define REMOTE_NUMA 7
+#define REMOTE_NUMA 0
 
 #define CAPACITY (1ull * 1024 * 1024 * 1024)
 
@@ -104,7 +104,7 @@ struct GIMMessageBuffer {
     int host_id;
     int numa_id;
     size_t capacity;
-    size_t count;   // the actual size (i.e. bytes) should be sizeof(element) * count
+    int count;   // the actual size (i.e. bytes) should be sizeof(element) * count
     char* data;
     GIMMessageBuffer(CXL_SHM* cxl_shm, int host_id, int numa_id) {
         this->cxl_shm = cxl_shm;
@@ -216,13 +216,34 @@ public:
     MessageBuffer*** send_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
     MessageBuffer*** recv_buffer;   // MessageBuffer* [partitions] [sockets]; numa-aware
 
-    // GIM
+    /*GIM data  */
     CXL_SHM* cxl_shm;
     GIM_comm* gim_comm;
+    // vertex buffer
     GIMMessageBuffer****
         gim_send_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
     GIMMessageBuffer****
         gim_recv_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
+    // edge data
+    EdgeId** gim_outgoing_edges;   // EdgeId [sockets] 稀疏模式下每个socket内出边总数
+    EdgeId** gim_incoming_edges;
+    Bitmap*** gim_incoming_adj_bitmap;   //  [socket][vertices]   每个 socket内的每个点是否有入边
+    EdgeId*** gim_incoming_adj_index;
+    AdjUnit<EdgeData>***
+        gim_incoming_adj_list;           // AdjUnit<EdgeData> [sockets] [该socket内出边总数];
+    Bitmap*** gim_outgoing_adj_bitmap;   // [socket][vertices]   每个 socket内的每个点是否有出边
+    EdgeId*** gim_outgoing_adj_index;   // EdgeId [sockets] [vertices+1]; numa-aware
+    AdjUnit<EdgeData>***
+        gim_outgoing_adj_list;   // AdjUnit<EdgeData> [sockets] [该socket点的内出边总数]; numa-aware
+    //压缩 edge data
+    VertexId** gim_compressed_incoming_adj_vertices;               // VertexId[socket]
+    CompressedAdjIndexUnit*** gim_compressed_incoming_adj_index;   // CompressedAdjIndexUnit
+    VertexId** gim_compressed_outgoing_adj_vertices;               // VertexId[socket]
+    CompressedAdjIndexUnit***
+        gim_compressed_outgoing_adj_index;   // CompressedAdjIndexUnit [sockets][有出边的点数+1];
+    // thread state
+    ThreadState*** gim_thread_state;   // ThreadState* [threads]; numa-aware
+
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -354,11 +375,6 @@ public:
 
         char nodestring[sockets * 2 + 1];
         nodestring[0] = '0' + partition_id * NUMA;
-        // for (int s_i = 1; s_i < sockets; s_i++) {
-        //   nodestring[s_i * 2 - 1] = ',';
-        //   nodestring[s_i * 2] = '0' + s_i;
-        // }
-        // for simulate
         int index = 1;
         for (int s_i = partition_id * NUMA + 1; s_i < partition_id * NUMA + NUMA; s_i++) {
             nodestring[index++] = ',';
@@ -373,43 +389,23 @@ public:
         omp_set_num_threads(threads);
         // 禁止omp动态调度并且固定使用cpu核数对应的线程
 
-        thread_state = new ThreadState*[threads];
+
+
+        gim_thread_state = new ThreadState**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_thread_state[p_i] = new ThreadState*[threads];
+            for (size_t t_i = 0; t_i < threads; t_i++) {
+                gim_thread_state[p_i][t_i] =
+                    (ThreadState*)cxl_shm->GIM_malloc(sizeof(ThreadState), p_i, get_socket_id(t_i));
+            }
+        }
         local_send_buffer_limit = 1024;
         local_send_buffer = new MessageBuffer*[threads];
         for (int t_i = 0; t_i < threads; t_i++) {
-            thread_state[t_i] = (ThreadState*)numa_alloc_onnode(
-                sizeof(ThreadState), get_real_numa_id(t_i, partition_id));
             local_send_buffer[t_i] = (MessageBuffer*)numa_alloc_onnode(
                 sizeof(MessageBuffer), get_real_numa_id(t_i, partition_id));
             local_send_buffer[t_i]->init(get_real_numa_id(t_i, partition_id));
         }
-        // numa-aware初始化thread_state 和local_send_buffer
-#pragma omp parallel for
-        for (int t_i = 0; t_i < threads; t_i++) {
-            // int s_i = get_socket_id(t_i);
-            // for simulate
-            int s_i = get_real_numa_id(t_i, partition_id);
-            // assert(numa_run_on_node(s_i) == 0);
-#ifdef PRINT_DEBUG_MESSAGES
-            if (partition_id == 3)
-                printf("partition-%d thread-%d bound to socket-%d\n", partition_id, t_i, s_i);
-#endif
-        }
-#ifdef PRINT_DEBUG_MESSAGES
-        if (partition_id == 3) {
-            printf("partition=%d threads=%d*%d\n", partition_id, sockets, threads_per_socket);
-            printf("interleave on %s\n", nodestring);
-        }
-#endif
-        // 检查多线程能否正常的运行在节点上？
-        //  #pragma omp parallel for
-        //  for (int t_i = 0; t_i < threads; t_i++) {
-        //   // set_thread_affinity(t_i+partition_id*threads);
-        // //   if (partition_id==0)
-        //    printf("partition:%d,logical thread:%d,physical
-        //    thread:%d\n",partition_id,omp_get_thread_num(),get_thread_core_id());
-        //  }
-
         /* origin send_buffer init */
         send_buffer = new MessageBuffer**[partitions];
         recv_buffer = new MessageBuffer**[partitions];
@@ -453,7 +449,7 @@ public:
                 for (int s_i = 0; s_i < sockets; s_i++) {
                     gim_send_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
                     gim_send_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
-                        sockets);
+                                                     sockets);
                     gim_recv_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
                     gim_recv_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
                                                      sockets);
@@ -461,14 +457,8 @@ public:
             }
         }
     }
-    double print_total_allreduce() {
-        return total_allreduce_time;
-    }
 
-
-    double print_total_process_time() {
-        return total_process_time;
-    }
+    double print_total_process_time() { return total_process_time; }
     // fill a vertex array with a specific value
     template<typename T> void fill_vertex_array(T* array, T value) {
 #pragma omp parallel for
@@ -814,6 +804,8 @@ public:
 #ifdef CXL_SHM
             outgoing_adj_index[s_i] =
                 (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1), REMOTE_NUMA);
+            outgoing_adj_index[s_i] =
+                (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1), REMOTE_NUMA);
 #else
             outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
                                                                  s_i + partition_id * NUMA);
@@ -1117,10 +1109,10 @@ public:
         tune_chunks();
         tuned_chunks_sparse = tuned_chunks_dense;
 
-        //gim_buffer
+        // gim_buffer
         init_gim_buffer();
 
-            prep_time += MPI_Wtime();
+        prep_time += MPI_Wtime();
 
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
@@ -1139,6 +1131,12 @@ public:
         std::swap(tuned_chunks_dense, tuned_chunks_sparse);
         std::swap(compressed_outgoing_adj_vertices, compressed_incoming_adj_vertices);
         std::swap(compressed_outgoing_adj_index, compressed_incoming_adj_index);
+        /* gim version */
+        std::swap(gim_outgoing_adj_index, gim_incoming_adj_index);
+        std::swap(gim_outgoing_adj_bitmap, gim_incoming_adj_bitmap);
+        std::swap(gim_outgoing_adj_list, gim_incoming_adj_list);
+        std::swap(gim_compressed_outgoing_adj_vertices, gim_compressed_incoming_adj_vertices);
+        std::swap(gim_compressed_outgoing_adj_index, gim_compressed_incoming_adj_index);
     }
 
     // load a directed graph from path
@@ -1354,27 +1352,30 @@ public:
 
         //每个节点内自己的数据，numa-aware
         EdgeId recv_outgoing_edges = 0;
-        outgoing_edges =
-            new EdgeId[sockets];   //存储每个 NUMA
-                                   //节点的出边数量，用于分布式图计算时确定每个节点需要处理的边。
-        outgoing_adj_index =
-            new EdgeId*[sockets];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
-        outgoing_adj_list =
-            new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
-        outgoing_adj_bitmap = new Bitmap*[sockets];   //邻接矩阵位图，判断某个点是否有出边
-        for (int s_i = 0; s_i < sockets; s_i++) {
-            outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
-            outgoing_adj_bitmap[s_i]->clear();
-// for simulate
-#ifdef CXL_SHM
-            outgoing_adj_index[s_i] =
-                (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1), REMOTE_NUMA);
-#else
-            outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
-                                                                 s_i + partition_id * NUMA);
-#endif
+        /* gim version */
+        gim_outgoing_edges = new EdgeId*[partitions];
+        gim_outgoing_adj_index =
+            new EdgeId**[partitions];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
+        gim_outgoing_adj_list =
+            new AdjUnit<EdgeData>**[partitions];   //邻接表数组，存储每个顶点的出边列表。
+        gim_outgoing_adj_bitmap = new Bitmap**[partitions];   //邻接矩阵位图，判断某个点是否有出边
+        for (int p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_edges[p_i] = (EdgeId*)cxl_shm->GIM_malloc(sizeof(EdgeId) * sockets, p_i);
+            gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
+            gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (int s_i = 0; s_i < sockets; s_i++) {
+                // uint8_t* data =
+                //     cxl_shm->GIM_malloc(sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+                // gim_outgoing_adj_bitmap[p_i][s_i] =
+                //     new Bitmap(vertices, reinterpret_cast<unsigned long*>(data));
+                gim_outgoing_adj_bitmap[p_i][s_i] =
+                        new Bitmap(vertices);
+                    // outgoing_adj_bitmap[s_i]->clear();
+                    gim_outgoing_adj_index[p_i][s_i] =
+                        (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+            }
         }
-
 
         {
             //接受线程接受所有其他一级分区的边，更新numa的CSR格式和每个节点内点的入度
@@ -1414,13 +1415,16 @@ public:
                                dst < partition_offset[partition_id + 1]);
                         int dst_part = get_local_partition_id(dst);   //找到点所在在numa的id
                         //检查并更新位图,更新邻接索引和入度
-                        if (!outgoing_adj_bitmap[dst_part]->get_bit(src)) {
-                            outgoing_adj_bitmap[dst_part]->set_bit(src);   //该点存在出边
-                            outgoing_adj_index[dst_part][src] = 0;
+                        /* gim_version */
+                        if (!gim_outgoing_adj_bitmap[partition_id][dst_part]->get_bit(src)) {
+                            gim_outgoing_adj_bitmap[partition_id][dst_part]->set_bit(
+                                src);   //该点存在出边
+                            gim_outgoing_adj_index[partition_id][dst_part][src] = 0;
                         }
-                        __sync_fetch_and_add(&outgoing_adj_index[dst_part][src],
-                                             1);                    //每个socket内src的出边数
-                        __sync_fetch_and_add(&in_degree[dst], 1);   //更新每个节点内master点的入度
+                        __sync_fetch_and_add(&gim_outgoing_adj_index[partition_id][dst_part][src],
+                                             1);   //每个socket内src的出边数
+                        __sync_fetch_and_add(&in_degree[dst],
+                                             1);   //更新每个节点内master点的入度
                     }
                     recv_outgoing_edges += recv_edges;
                 }
@@ -1484,72 +1488,88 @@ public:
             printf("machine(%d) got %lu sparse mode edges\n", partition_id, recv_outgoing_edges);
 #endif
         }
-
-        compressed_outgoing_adj_vertices = new VertexId[sockets];
-        compressed_outgoing_adj_index = new CompressedAdjIndexUnit*[sockets];
+        printf("aaa\n");
+        gim_compressed_outgoing_adj_vertices = new VertexId*[partitions];
+        gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[partitions];
         size_t compressed_outgoing_adj_index_size = 0;
         size_t outgoing_adj_list_size = 0;
-        for (int s_i = 0; s_i < sockets; s_i++) {   //遍历每个numa
-            outgoing_edges[s_i] = 0;                //每个numa numa的出边数
-            compressed_outgoing_adj_vertices[s_i] = 0;
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_outgoing_adj_vertices[p_i] =
+                (VertexId*)cxl_shm->CXL_SHM_malloc(sizeof(VertexId) * sockets);
+            gim_compressed_outgoing_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+        }
+
+        for (int s_i = 0; s_i < sockets; s_i++) {        //遍历每个numa
+            gim_outgoing_edges[partition_id][s_i] = 0;   //每个numa numa的出边数
+            gim_compressed_outgoing_adj_vertices[partition_id][s_i] = 0;
             for (VertexId v_i = 0; v_i < vertices; v_i++) {   //遍历所有的点
-                if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
-                    outgoing_edges[s_i] += outgoing_adj_index[s_i][v_i];   //每个socket出边总数
-                    compressed_outgoing_adj_vertices[s_i] += 1;            //有出边的点数
+                if (gim_outgoing_adj_bitmap[partition_id][s_i]->get_bit(v_i)) {
+                    gim_outgoing_edges[partition_id][s_i] +=
+                        gim_outgoing_adj_index[partition_id][s_i][v_i];   //每个socket出边总数
+                    gim_compressed_outgoing_adj_vertices[partition_id][s_i] += 1;   //有出边的点数
                 }
             }
-            // for simulate
-            compressed_outgoing_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_outgoing_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        printf("%lu\n",gim_outgoing_edges[0][0]);
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_outgoing_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        sizeof(CompressedAdjIndexUnit) *
+                        (gim_compressed_outgoing_adj_vertices[p_i][s_i] + 1));
+            }
+        }
+        for (int s_i = 0; s_i < sockets; s_i++) {
             compressed_outgoing_adj_index_size +=
-                sizeof(CompressedAdjIndexUnit) * (compressed_outgoing_adj_vertices[s_i] + 1);
-            compressed_outgoing_adj_index[s_i][0].index = 0;
+                sizeof(CompressedAdjIndexUnit) *
+                (gim_compressed_outgoing_adj_vertices[partition_id][s_i] + 1);
+            gim_compressed_outgoing_adj_index[partition_id][s_i][0].index = 0;
             EdgeId last_e_i = 0;
-            compressed_outgoing_adj_vertices[s_i] = 0;
+            gim_compressed_outgoing_adj_vertices[partition_id][s_i] = 0;
             for (VertexId v_i = 0; v_i < vertices; v_i++) {
-                if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {   //如果mirror v_i有出边
-                    outgoing_adj_index[s_i][v_i] = last_e_i + outgoing_adj_index[s_i][v_i];
-                    last_e_i = outgoing_adj_index[s_i][v_i];
-                    compressed_outgoing_adj_index[s_i][compressed_outgoing_adj_vertices[s_i]]
-                        .vertex = v_i;
-                    compressed_outgoing_adj_vertices[s_i] += 1;
-                    compressed_outgoing_adj_index[s_i][compressed_outgoing_adj_vertices[s_i]]
-                        .index = last_e_i;
+                if (gim_outgoing_adj_bitmap[partition_id][s_i]->get_bit(
+                        v_i)) {   //如果mirror v_i有出边
+                    gim_outgoing_adj_index[partition_id][s_i][v_i] =
+                        last_e_i + gim_outgoing_adj_index[partition_id][s_i][v_i];
+                    last_e_i = gim_outgoing_adj_index[partition_id][s_i][v_i];
+                    gim_compressed_outgoing_adj_index
+                        [partition_id][s_i][gim_compressed_outgoing_adj_vertices[partition_id][s_i]]
+                            .vertex = v_i;
+                    gim_compressed_outgoing_adj_vertices[partition_id][s_i] += 1;
+                    gim_compressed_outgoing_adj_index
+                        [partition_id][s_i][gim_compressed_outgoing_adj_vertices[partition_id][s_i]]
+                            .index = last_e_i;
                 }
             }
-            for (VertexId p_v_i = 0; p_v_i < compressed_outgoing_adj_vertices[s_i];
+            for (VertexId p_v_i = 0;
+                 p_v_i < gim_compressed_outgoing_adj_vertices[partition_id][s_i];
                  p_v_i++) {   //对于socket内每一条出边
-                VertexId v_i = compressed_outgoing_adj_index[s_i][p_v_i].vertex;   // master点
+                VertexId v_i = gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i]
+                                   .vertex;   // master点
                 //利用compressed_outgoing_adj_index出边的索引重新更新outgoing_adj_index的索引
                 //前面的代码中outgoing_adj_index记录的不是索引，而是出边数，现在才是真正的索引，你是会写代码的
-                outgoing_adj_index[s_i][v_i] = compressed_outgoing_adj_index[s_i][p_v_i].index;
-                outgoing_adj_index[s_i][v_i + 1] =
-                    compressed_outgoing_adj_index[s_i][p_v_i + 1].index;
+                gim_outgoing_adj_index[partition_id][s_i][v_i] =
+                    gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i].index;
+                gim_outgoing_adj_index[partition_id][s_i][v_i + 1] =
+                    gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i + 1].index;
             }
-#ifdef PRINT_DEBUG_MESSAGES
-            printf("part(%d) E_%d has %lu sparse mode edges\n",
-                   partition_id,
-                   s_i,
-                   outgoing_edges[s_i]);
-#endif
-            // for simulate
-#ifdef CXL_SHM
-            outgoing_adj_list[s_i] =
-                (AdjUnit<EdgeData>*)numa_alloc_onnode(unit_size * outgoing_edges[s_i], REMOTE_NUMA);
-#else
-            outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-                unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
-#endif
-            outgoing_adj_list_size += unit_size * outgoing_edges[s_i];
+
+
+            outgoing_adj_list_size += unit_size * gim_outgoing_edges[partition_id][s_i];
         }
+        printf("a0\n");
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                printf("out edge: %ld\n",  gim_outgoing_edges[p_i][s_i]);
+                gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(unit_size * gim_outgoing_edges[p_i][s_i]);
+            }
+        }
+
         // calculate size
         data_size["outgoing_adj_list"] = outgoing_adj_list_size;
         data_size["compressed_outgoing_adj_index"] = compressed_outgoing_adj_index_size;
-        // if (partition_id==0) {
-        //   printf("outgoing_adj_list_size:%d\n",outgoing_adj_list_size/1024/1024);
-        //   printf("compressed_outgoing_adj_index_size:%d\n",compressed_outgoing_adj_index_size/1024/1024);
-        // }
+        printf("a1\n");
 
         {
             std::thread recv_thread_dst([&]() {
@@ -1585,11 +1605,14 @@ public:
                                dst <
                                    partition_offset[partition_id + 1]);   //如果dst是本host的master
                         int dst_part = get_local_partition_id(dst);
-                        EdgeId pos = __sync_fetch_and_add(&outgoing_adj_index[dst_part][src], 1);
-                        outgoing_adj_list[dst_part][pos].neighbour = dst;   //每个socket内
+                        EdgeId pos = __sync_fetch_and_add(
+                            &gim_outgoing_adj_index[partition_id][dst_part][src], 1);
+                        gim_outgoing_adj_list[partition_id][dst_part][pos].neighbour =
+                            dst;   //每个socket内
                         if (!std::is_same<EdgeData,
                                           Empty>::value) {   //如果EdgeData不是空要初始化edge_data
-                            outgoing_adj_list[dst_part][pos].edge_data = recv_buffer[e_i].edge_data;
+                            gim_outgoing_adj_list[partition_id][dst_part][pos].edge_data =
+                                recv_buffer[e_i].edge_data;
                         }
                     }
                 }
@@ -1646,31 +1669,43 @@ public:
         }
         //因为上面用outgoing_adj_index做别的用途，值改变了，这里重新赋回来，可读性极差的写法！
         for (int s_i = 0; s_i < sockets; s_i++) {
-            for (VertexId p_v_i = 0; p_v_i < compressed_outgoing_adj_vertices[s_i]; p_v_i++) {
-                VertexId v_i = compressed_outgoing_adj_index[s_i][p_v_i].vertex;
-                outgoing_adj_index[s_i][v_i] = compressed_outgoing_adj_index[s_i][p_v_i].index;
-                outgoing_adj_index[s_i][v_i + 1] =
-                    compressed_outgoing_adj_index[s_i][p_v_i + 1].index;
+            for (VertexId p_v_i = 0;
+                 p_v_i < gim_compressed_outgoing_adj_vertices[partition_id][s_i];
+                 p_v_i++) {
+                VertexId v_i = gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i].vertex;
+                gim_outgoing_adj_index[partition_id][s_i][v_i] =
+                    gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i].index;
+                gim_outgoing_adj_index[partition_id][s_i][v_i + 1] =
+                    gim_compressed_outgoing_adj_index[partition_id][s_i][p_v_i + 1].index;
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
+        printf("a2\n");
 
-
-
+        /* incoming */
         EdgeId recv_incoming_edges = 0;
         incoming_edges = new EdgeId[sockets];
-        incoming_adj_index = new EdgeId*[sockets];
-        incoming_adj_list = new AdjUnit<EdgeData>*[sockets];
-        incoming_adj_bitmap = new Bitmap*[sockets];
-
-        for (int s_i = 0; s_i < sockets; s_i++) {
-            incoming_adj_bitmap[s_i] = new Bitmap(vertices);
-            incoming_adj_bitmap[s_i]->clear();
-            // for simulate
-            incoming_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
-                                                                 s_i + partition_id * NUMA);
+        /* gim version */
+        gim_incoming_adj_index =
+            new EdgeId**[partitions];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
+        gim_incoming_adj_list =
+            new AdjUnit<EdgeData>**[partitions];   //邻接表数组，存储每个顶点的出边列表。
+        gim_incoming_adj_bitmap = new Bitmap**[partitions];   //邻接矩阵位图，判断某个点是否有出边
+        for (int p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_index[p_i] = new EdgeId*[sockets];
+            gim_incoming_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (int s_i = 0; s_i < sockets; s_i++) {
+                // uint8_t* data =
+                //     cxl_shm->GIM_malloc(sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+                gim_incoming_adj_bitmap[p_i][s_i] =
+                    new Bitmap(vertices);
+                // incoming_adj_bitmap[s_i]->clear();
+                gim_incoming_adj_index[p_i][s_i] =
+                    (EdgeId*)cxl_shm->GIM_malloc(sizeof(EdgeId) * (vertices + 1), p_i, s_i);
+            }
         }
-
+        printf("a3\n");
 
         {
             std::thread recv_thread_src([&]() {
@@ -1706,11 +1741,14 @@ public:
                                src < partition_offset[partition_id + 1]);   //本host内master的出边
                         int src_part = get_local_partition_id(src);
                         // mirror的入边
-                        if (!incoming_adj_bitmap[src_part]->get_bit(dst)) {
-                            incoming_adj_bitmap[src_part]->set_bit(dst);   //该dst存在入边
-                            incoming_adj_index[src_part][dst] = 0;   //记录dst入边的数量
+                        if (!gim_incoming_adj_bitmap[partition_id][src_part]->get_bit(dst)) {
+                            gim_incoming_adj_bitmap[partition_id][src_part]->set_bit(
+                                dst);   //该dst存在入边
+                            gim_incoming_adj_index[partition_id][src_part][dst] =
+                                0;   //记录dst入边的数量
                         }
-                        __sync_fetch_and_add(&incoming_adj_index[src_part][dst], 1);
+                        __sync_fetch_and_add(&gim_incoming_adj_index[partition_id][src_part][dst],
+                                             1);
                     }
                     recv_incoming_edges += recv_edges;
                 }
@@ -1768,75 +1806,69 @@ public:
             printf("machine(%d) got %lu dense mode edges\n", partition_id, recv_incoming_edges);
 #endif
         }
-        compressed_incoming_adj_vertices = new VertexId[sockets];
-        compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
+        gim_compressed_incoming_adj_vertices = new VertexId*[partitions];
+        gim_compressed_incoming_adj_index = new CompressedAdjIndexUnit**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_incoming_adj_vertices[p_i] =
+                (VertexId*)cxl_shm->CXL_SHM_malloc(sizeof(VertexId) * sockets);
+            gim_compressed_incoming_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_incoming_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        sizeof(CompressedAdjIndexUnit) *
+                        (gim_compressed_incoming_adj_vertices[partition_id][s_i] + 1));
+            }
+        }
+
         size_t incoming_adj_list_size = 0;
         size_t compressed_incoming_adj_index_size = 0;
         for (int s_i = 0; s_i < sockets; s_i++) {   //遍历numa
             incoming_edges[s_i] = 0;
-            compressed_incoming_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {                //遍历所有的点
-                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              //如果dst有入边
-                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   //每个socket的入边总数
-                    compressed_incoming_adj_vertices[s_i] += 1;            //有入边的点数
+            gim_compressed_incoming_adj_vertices[partition_id][s_i] = 0;
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {   //遍历所有的点
+                if (gim_incoming_adj_bitmap[partition_id][s_i]->get_bit(v_i)) {   //如果dst有入边
+                    incoming_edges[s_i] +=
+                        gim_incoming_adj_index[partition_id][s_i][v_i];   //每个socket的入边总数
+                    gim_compressed_incoming_adj_vertices[partition_id][s_i] += 1;   //有入边的点数
                 }
             }
             // for simulate
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
-#ifdef CXL_SHM
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                REMOTE_NUMA);
-#else
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
-#endif
             compressed_incoming_adj_index_size +=
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1);
-            compressed_incoming_adj_index[s_i][0].index = 0;
+                sizeof(CompressedAdjIndexUnit) *
+                (gim_compressed_incoming_adj_vertices[partition_id][s_i] + 1);
+            gim_compressed_incoming_adj_index[partition_id][s_i][0].index = 0;
             EdgeId last_e_i = 0;
-            compressed_incoming_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {     //遍历所有的点
-                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {   //如果dst有入边
-                    incoming_adj_index[s_i][v_i] = last_e_i + incoming_adj_index[s_i][v_i];
-                    last_e_i = incoming_adj_index[s_i][v_i];
-                    compressed_incoming_adj_index[s_i][compressed_incoming_adj_vertices[s_i]]
-                        .vertex = v_i;
-                    compressed_incoming_adj_vertices[s_i] += 1;
-                    compressed_incoming_adj_index[s_i][compressed_incoming_adj_vertices[s_i]]
-                        .index = last_e_i;
+            gim_compressed_incoming_adj_vertices[partition_id][s_i] = 0;
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {   //遍历所有的点
+                if (gim_incoming_adj_bitmap[partition_id][s_i]->get_bit(v_i)) {   //如果dst有入边
+                    gim_incoming_adj_index[partition_id][s_i][v_i] =
+                        last_e_i + gim_incoming_adj_index[partition_id][s_i][v_i];
+                    last_e_i = gim_incoming_adj_index[partition_id][s_i][v_i];
+                    gim_compressed_incoming_adj_index
+                        [partition_id][s_i][gim_compressed_incoming_adj_vertices[partition_id][s_i]]
+                            .vertex = v_i;
+                    gim_compressed_incoming_adj_vertices[partition_id][s_i] += 1;
+                    gim_compressed_incoming_adj_index
+                        [partition_id][s_i][gim_compressed_incoming_adj_vertices[partition_id][s_i]]
+                            .index = last_e_i;
                 }
             }
-            for (VertexId p_v_i = 0; p_v_i < compressed_incoming_adj_vertices[s_i]; p_v_i++) {
-                VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
-                incoming_adj_index[s_i][v_i] = compressed_incoming_adj_index[s_i][p_v_i].index;
-                incoming_adj_index[s_i][v_i + 1] =
-                    compressed_incoming_adj_index[s_i][p_v_i + 1].index;
+            for (VertexId p_v_i = 0;
+                 p_v_i < gim_compressed_incoming_adj_vertices[partition_id][s_i];
+                 p_v_i++) {
+                VertexId v_i = gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i].vertex;
+                gim_incoming_adj_index[partition_id][s_i][v_i] =
+                    gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i].index;
+                gim_incoming_adj_index[partition_id][s_i][v_i + 1] =
+                    gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i + 1].index;
             }
-#ifdef PRINT_DEBUG_MESSAGES
-            printf(
-                "part(%d) E_%d has %lu dense mode edges\n", partition_id, s_i, incoming_edges[s_i]);
-#endif
-            // for simulate
-#ifdef CXL_SHM
-            incoming_adj_list[s_i] =
-                (AdjUnit<EdgeData>*)numa_alloc_onnode(unit_size * incoming_edges[s_i], REMOTE_NUMA);
-#else
-            incoming_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-                unit_size * incoming_edges[s_i], s_i + partition_id * NUMA);
-#endif
-
+            gim_incoming_adj_list[partition_id][s_i] =
+                (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(unit_size * incoming_edges[s_i]);
             incoming_adj_list_size += unit_size * incoming_edges[s_i];
         }
         data_size["incoming_adj_list"] = incoming_adj_list_size;
         data_size["compressed_incoming_adj_index"] = compressed_incoming_adj_index_size;
-        // if (partition_id==0) {
-        //   printf("incoming_adj_list_size:%d\n",incoming_adj_list_size/1024/1024);
-        //   printf("compressed_incoming_adj_index_size:%d\n",compressed_incoming_adj_index_size/1024/1024);
-        // }
+
 
         {
             std::thread recv_thread_src([&]() {
@@ -1872,9 +1904,10 @@ public:
                                src < partition_offset[partition_id + 1]);
                         int src_part = get_local_partition_id(src);
                         EdgeId pos = __sync_fetch_and_add(&incoming_adj_index[src_part][dst], 1);
-                        incoming_adj_list[src_part][pos].neighbour = src;
+                        gim_incoming_adj_list[partition_id][src_part][pos].neighbour = src;
                         if (!std::is_same<EdgeData, Empty>::value) {
-                            incoming_adj_list[src_part][pos].edge_data = recv_buffer[e_i].edge_data;
+                            gim_incoming_adj_list[partition_id][src_part][pos].edge_data =
+                                recv_buffer[e_i].edge_data;
                         }
                     }
                 }
@@ -1930,11 +1963,14 @@ public:
             recv_thread_src.join();
         }
         for (int s_i = 0; s_i < sockets; s_i++) {
-            for (VertexId p_v_i = 0; p_v_i < compressed_incoming_adj_vertices[s_i]; p_v_i++) {
-                VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
-                incoming_adj_index[s_i][v_i] = compressed_incoming_adj_index[s_i][p_v_i].index;
-                incoming_adj_index[s_i][v_i + 1] =
-                    compressed_incoming_adj_index[s_i][p_v_i + 1].index;
+            for (VertexId p_v_i = 0;
+                 p_v_i < gim_compressed_incoming_adj_vertices[partition_id][s_i];
+                 p_v_i++) {
+                VertexId v_i = gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i].vertex;
+                gim_incoming_adj_index[partition_id][s_i][v_i] =
+                    gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i].index;
+                gim_incoming_adj_index[partition_id][s_i][v_i + 1] =
+                    gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i + 1].index;
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -2040,23 +2076,12 @@ public:
                 }
             }
         }
-        // if(partition_id==0){
-        //   for (int i=0;i<partitions;i++){
-        //     for(int j=0;j<threads;j++){
-        //       printf("part:%d thread:%d curr:%d
-        //       end:%d\n",i,j,tuned_chunks_dense[i][j].curr,tuned_chunks_dense[i][j].end);
-        //     }
-        //   }
-        // }
     }
 
     //对于acrive中的点执行process任务，启用了工作窃取
     // process vertices
     template<typename R> R process_vertices(std::function<R(VertexId)> process, Bitmap* active) {
         double stream_time = 0;
-        stream_time -= MPI_Wtime();
-        allreduce_time = 0;
-
         R reducer = 0;
         size_t basic_chunk = 64;   //每次处理的顶点数，和WORD的位数是对应的
         for (int t_i = 0; t_i < threads; t_i++) {
@@ -2064,26 +2089,28 @@ public:
             int s_j = get_socket_offset(t_i);
             VertexId partition_size = local_partition_offset[s_i + 1] -
                                       local_partition_offset[s_i];   //每个分区的点的数量
-            thread_state[t_i]->curr =
+            gim_thread_state[partition_id][t_i]->curr =
                 local_partition_offset[s_i] +
                 partition_size / threads_per_socket / basic_chunk * basic_chunk *
                     s_j;   //设置线程的curr，处理点的起始位置，和basic_chunk对齐
-            thread_state[t_i]->end =
+            gim_thread_state[partition_id][t_i]->end =
                 local_partition_offset[s_i] + partition_size / threads_per_socket / basic_chunk *
                                                   basic_chunk * (s_j + 1);   //设置线程的end
             if (s_j == threads_per_socket - 1) {
-                thread_state[t_i]->end = local_partition_offset[s_i + 1];   //设置最后一个线程的end
+                gim_thread_state[partition_id][t_i]->end =
+                    local_partition_offset[s_i + 1];   //设置最后一个线程的end
             }
-            thread_state[t_i]->status = WORKING;
+            gim_thread_state[partition_id][t_i]->status = WORKING;
         }
 #pragma omp parallel reduction(+ : reducer)
         {
             R local_reducer = 0;
             int thread_id = omp_get_thread_num();
             while (true) {
-                VertexId v_i = __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                if (v_i >=
-                    thread_state[thread_id]->end)   //遍历当前线程要处理的点，一次处理basic_chunk
+                VertexId v_i = __sync_fetch_and_add(
+                    &gim_thread_state[partition_id][thread_id]->curr, basic_chunk);
+                if (v_i >= gim_thread_state[partition_id][thread_id]
+                               ->end)   //遍历当前线程要处理的点，一次处理basic_chunk
                     break;
                 unsigned long word =
                     active->data[WORD_OFFSET(v_i)];   //根据Bitmap *active决定是否执行process
@@ -2096,13 +2123,13 @@ public:
                 }
             }
             //当前线程的任务处理完后，将状态设置为 STEALING，表示它可能会去“偷取”其他线程的任务
-            thread_state[thread_id]->status = STEALING;
+            gim_thread_state[partition_id][thread_id]->status = STEALING;
             for (int t_offset = 1; t_offset < threads; t_offset++) {
                 int t_i = (thread_id + t_offset) % threads;
-                while (thread_state[t_i]->status !=
+                while (gim_thread_state[partition_id][t_i]->status !=
                        STEALING) {   //如果目标线程的状态不是 STEALING，则尝试窃取工作。
                     VertexId v_i = __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
-                    if (v_i >= thread_state[t_i]->end) continue;
+                    if (v_i >= gim_thread_state[partition_id][t_i]->end) continue;
                     unsigned long word = active->data[WORD_OFFSET(v_i)];
                     while (word != 0) {
                         if (word & 1) {
@@ -2118,11 +2145,8 @@ public:
         //当本host的任务都完成，开始全局规约
         R global_reducer;
         MPI_Datatype dt = get_mpi_data_type<R>();
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
         stream_time += MPI_Wtime();
-        total_allreduce_time += allreduce_time;
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("process_vertices took %lf (s)\n", stream_time);
@@ -2146,6 +2170,7 @@ public:
     //     local_send_buffer[t_i]->count = 0;
     // }
 
+    /* gim version flush */
     template<typename M> void flush_local_send_buffer(int t_i) {
         int s_i = get_socket_id(t_i);   //线程在那个socket
         int pos = __sync_fetch_and_add(
@@ -2181,7 +2206,6 @@ public:
                     Bitmap* dense_selective = nullptr) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
-        allreduce_time = 0;
         for (int i = 0; i < 4; i++) {
             process_edge_time[i] = 0;
         }
@@ -2203,14 +2227,6 @@ public:
         if (sparse) {
             for (int i = 0; i < partitions; i++) {   //稀疏模式每个host要向外发送数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    // if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                    //             sockets >CAPACITY ||
-                    //     sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
-
-                    //     ERROR("out of CAPACITY");
-
-                    // }
-
                     // recv_buffer[i][s_i]->resize(
                     //     sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
                     //     sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
@@ -2237,13 +2253,6 @@ public:
         } else {
             for (int i = 0; i < partitions; i++) {   //稠密模式每个host要接受数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
-                    // if (sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                    //             sockets >
-                    //         CAPACITY ||
-                    //     sizeof(MsgUnit<M>) * owned_vertices * sockets > CAPACITY) {
-                    //     ERROR("out of CAPACITY");
-                    // }
-
                     // recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
                     //                             sockets);   //跟上面相反
                     // send_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) *
@@ -2260,6 +2269,7 @@ public:
                         sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     gim_send_buffer[partition_id][i][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
+
                     recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
                     send_buffer_size += sizeof(MsgUnit<M>) *
                                         (partition_offset[i + 1] - partition_offset[i]) * sockets;
@@ -2269,10 +2279,6 @@ public:
         data_size["local_send_buffer"] = local_send_buffer_size;
         data_size["send_buffer"] = send_buffer_size;
         data_size["recv_buffer"] = recv_buffer_size;
-        // if (partition_id==0) {
-        // printf("process_edge:local_send_buffer_size:%d\n",local_send_buffer_size);
-        // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
-        // }
         size_t basic_chunk = 64;
         if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
@@ -2316,19 +2322,20 @@ public:
                     int i = (partition_id - step + partitions) %
                             partitions;   //确保i进程是除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {   //遍历所有socket
-                        // MPI_Send(send_buffer[partition_id][s_i]->data,
-                        //          sizeof(MsgUnit<M>) * send_buffer[partition_id][s_i]->count,
-                        //          MPI_CHAR,
-                        //          i,
-                        //          PassMessage,
-                        //          MPI_COMM_WORLD);
-                        gim_comm->GIM_Send(
-                            gim_send_buffer[partition_id][partition_id][s_i]->data,
-                            sizeof(MsgUnit<M>) *
-                                gim_send_buffer[partition_id][partition_id][s_i]->count,
-                            i,
-                            0,
-                            gim_recv_buffer[i][partition_id][s_i]->data);
+                        MPI_Send(gim_send_buffer[partition_id][partition_id][s_i]->data,
+                                 sizeof(MsgUnit<M>) *
+                                     gim_send_buffer[partition_id][partition_id][s_i]->count,
+                                 MPI_CHAR,
+                                 i,
+                                 PassMessage,
+                                 MPI_COMM_WORLD);
+                        //     gim_comm->GIM_Send(
+                        //         gim_send_buffer[partition_id][partition_id][s_i]->data,
+                        //         sizeof(MsgUnit<M>) *
+                        //             gim_send_buffer[partition_id][partition_id][s_i]->count,
+                        //         i,
+                        //         0,
+                        //         gim_recv_buffer[i][partition_id][s_i]->data);
                     }
                 }
             });
@@ -2337,20 +2344,24 @@ public:
                     int i = (partition_id + step) % partitions;   //除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {     //遍历所有socket
                         MPI_Status recv_status;
-                        // MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
-                        // MPI_Get_count(&recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
-                        // MPI_Recv(recv_buffer[i][s_i]->data,
-                        //          recv_buffer[i][s_i]->count,
-                        //          MPI_CHAR,
-                        //          i,
-                        //          PassMessage,
-                        //          MPI_COMM_WORLD,
-                        //          MPI_STATUS_IGNORE);
-                        // recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
-                        // gim_comm->GIM_Probe(i, 0);
-                        gim_comm->GIM_Get_count(i, 0, gim_recv_buffer[partition_id][i][s_i]->count);
-                        gim_comm->GIM_Recv(gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
+                        MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
+                        MPI_Get_count(
+                            &recv_status, MPI_CHAR, &gim_recv_buffer[partition_id][i][s_i]->count);
+                        MPI_Recv(gim_recv_buffer[partition_id][i][s_i]->data,
+                                 gim_recv_buffer[partition_id][i][s_i]->count,
+                                 MPI_CHAR,
+                                 i,
+                                 PassMessage,
+                                 MPI_COMM_WORLD,
+                                 MPI_STATUS_IGNORE);
                         gim_recv_buffer[partition_id][i][s_i]->count /= sizeof(MsgUnit<M>);
+
+
+                        // gim_comm->GIM_Probe(i, 0);
+                        // gim_comm->GIM_Get_count(i, 0,
+                        // gim_recv_buffer[partition_id][i][s_i]->count);
+                        // gim_comm->GIM_Recv(gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
+                        // gim_recv_buffer[partition_id][i][s_i]->count /= sizeof(MsgUnit<M>);
                     }
                     recv_queue[recv_queue_size] = i;
                     recv_queue_mutex.lock();
@@ -2389,14 +2400,15 @@ public:
                         // int s_i = get_socket_id(t_i);
                         int s_j = get_socket_offset(t_i);
                         VertexId partition_size = buffer_size;
-                        thread_state[t_i]->curr =
+                        gim_thread_state[partition_id][t_i]->curr =
                             partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
-                        thread_state[t_i]->end = partition_size / threads_per_socket / basic_chunk *
-                                                 basic_chunk * (s_j + 1);
+                        gim_thread_state[partition_id][t_i]->end =
+                            partition_size / threads_per_socket / basic_chunk * basic_chunk *
+                            (s_j + 1);
                         if (s_j == threads_per_socket - 1) {
-                            thread_state[t_i]->end = buffer_size;
+                            gim_thread_state[partition_id][t_i]->end = buffer_size;
                         }
-                        thread_state[t_i]->status = WORKING;
+                        gim_thread_state[partition_id][t_i]->status = WORKING;
                     }
 #pragma omp parallel reduction(+ : reducer)
                     {
@@ -2406,63 +2418,64 @@ public:
                         //执行sparse_slot
                         while (true) {
                             //线程开始从自己负责的部分开始获取任务
-                            VertexId b_i =
-                                __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                            if (b_i >= thread_state[thread_id]->end) break;
+                            VertexId b_i = __sync_fetch_and_add(
+                                &gim_thread_state[partition_id][thread_id]->curr, basic_chunk);
+                            if (b_i >= gim_thread_state[partition_id][thread_id]->end) break;
                             VertexId begin_b_i = b_i;
                             VertexId end_b_i = b_i + basic_chunk;
-                            if (end_b_i > thread_state[thread_id]->end) {
-                                end_b_i = thread_state[thread_id]->end;
+                            if (end_b_i > gim_thread_state[partition_id][thread_id]->end) {
+                                end_b_i = gim_thread_state[partition_id][thread_id]->end;
                             }
                             //获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
                             for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                                 VertexId v_i = buffer[b_i].vertex;
                                 M msg_data = buffer[b_i].msg_data;
-                                if (outgoing_adj_bitmap[s_i]->get_bit(
+                                if (gim_outgoing_adj_bitmap[partition_id][s_i]->get_bit(
                                         v_i)) {   //如果v_i在s_i socket内有出边
                                     local_reducer += sparse_slot(
                                         v_i,
                                         msg_data,
                                         VertexAdjList<EdgeData>(   //遍历v_i在s_i
                                                                    // socket内的出边的dst
-                                            outgoing_adj_list[s_i] +
-                                                outgoing_adj_index[s_i]
-                                                                  [v_i],   // s_i内v_i的出边开始
-                                            outgoing_adj_list[s_i] +
-                                                outgoing_adj_index[s_i]
-                                                                  [v_i +
-                                                                   1]));   // s_i内v_i的出边结束
+                                            gim_outgoing_adj_list[partition_id][s_i] +
+                                                gim_outgoing_adj_index[partition_id][s_i]
+                                                                      [v_i],   // s_i内v_i的出边开始
+                                            gim_outgoing_adj_list[partition_id][s_i] +
+                                                gim_outgoing_adj_index[partition_id][s_i]
+                                                                      [v_i +
+                                                                       1]));   // s_i内v_i的出边结束
                                 }
                             }
                         }
                         //工作窃取
-                        thread_state[thread_id]->status = STEALING;
+                        gim_thread_state[partition_id][thread_id]->status = STEALING;
                         for (int t_offset = 1; t_offset < threads; t_offset++) {
                             int t_i = (thread_id + t_offset) % threads;
-                            if (thread_state[t_i]->status == STEALING) continue;
+                            if (gim_thread_state[partition_id][t_i]->status == STEALING) continue;
                             while (true) {
-                                VertexId b_i =
-                                    __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
-                                if (b_i >= thread_state[t_i]->end) break;
+                                VertexId b_i = __sync_fetch_and_add(
+                                    &gim_thread_state[partition_id][t_i]->curr, basic_chunk);
+                                if (b_i >= gim_thread_state[partition_id][t_i]->end) break;
                                 VertexId begin_b_i = b_i;
                                 VertexId end_b_i = b_i + basic_chunk;
-                                if (end_b_i > thread_state[t_i]->end) {
-                                    end_b_i = thread_state[t_i]->end;
+                                if (end_b_i > gim_thread_state[partition_id][t_i]->end) {
+                                    end_b_i = gim_thread_state[partition_id][t_i]->end;
                                 }
                                 int s_i = get_socket_id(t_i);
                                 for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                                     VertexId v_i = buffer[b_i].vertex;
                                     M msg_data = buffer[b_i].msg_data;
-                                    if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
+                                    if (gim_outgoing_adj_bitmap[partition_id][s_i]->get_bit(v_i)) {
                                         local_reducer += sparse_slot(
                                             v_i,
                                             msg_data,
                                             VertexAdjList<
                                                 EdgeData>(   //这里只是两个指针，具体数据是存放邻居的数组
-                                                outgoing_adj_list[s_i] +
-                                                    outgoing_adj_index[s_i][v_i],
-                                                outgoing_adj_list[s_i] +
-                                                    outgoing_adj_index[s_i][v_i + 1]));
+                                                gim_outgoing_adj_list[partition_id][s_i] +
+                                                    gim_outgoing_adj_index[partition_id][s_i][v_i],
+                                                gim_outgoing_adj_list[partition_id][s_i] +
+                                                    gim_outgoing_adj_index[partition_id][s_i]
+                                                                          [v_i + 1]));
                                     }
                                 }
                             }
@@ -2575,26 +2588,27 @@ public:
                             [&](int i) {   // i是分区
                                 for (int s_i = 0; s_i < sockets; s_i++) {
                                     MPI_Status recv_status;
-                                    // MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
-                                    // MPI_Get_count(
-                                    //     &recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
-                                    // MPI_Recv(recv_buffer[i][s_i]->data,
-                                    //          recv_buffer[i][s_i]->count,
-                                    //          MPI_CHAR,
-                                    //          i,
-                                    //          PassMessage,
-                                    //          MPI_COMM_WORLD,
-                                    //          MPI_STATUS_IGNORE);
-                                    // recv_buffer[i][s_i]->count /= sizeof(MsgUnit<M>);
-
-
-                                    // gim_comm->GIM_Probe(i, 0);
-                                    gim_comm->GIM_Get_count(
-                                        i, 0, gim_recv_buffer[partition_id][i][s_i]->count);
-                                    gim_comm->GIM_Recv(
-                                        gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
+                                    MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
+                                    MPI_Get_count(&recv_status,
+                                                  MPI_CHAR,
+                                                  &gim_recv_buffer[partition_id][i][s_i]->count);
+                                    MPI_Recv(gim_recv_buffer[partition_id][i][s_i]->data,
+                                             gim_recv_buffer[partition_id][i][s_i]->count,
+                                             MPI_CHAR,
+                                             i,
+                                             PassMessage,
+                                             MPI_COMM_WORLD,
+                                             MPI_STATUS_IGNORE);
                                     gim_recv_buffer[partition_id][i][s_i]->count /=
                                         sizeof(MsgUnit<M>);
+
+                                    // gim_comm->GIM_Probe(i, 0);
+                                    // gim_comm->GIM_Get_count(
+                                    //     i, 0, gim_recv_buffer[partition_id][i][s_i]->count);
+                                    // gim_comm->GIM_Recv(
+                                    //     gim_recv_buffer[partition_id][i][s_i]->count, i, 0);
+                                    // gim_recv_buffer[partition_id][i][s_i]->count /=
+                                    //     sizeof(MsgUnit<M>);
                                 }
                             },
                             i);
@@ -2618,18 +2632,18 @@ public:
                 current_send_part_id = (current_send_part_id + 1) % partitions;
                 int i = current_send_part_id;
                 for (int t_i = 0; t_i < threads; t_i++) {
-                    *thread_state[t_i] = tuned_chunks_dense[i][t_i];
+                    *gim_thread_state[partition_id][t_i] = tuned_chunks_dense[i][t_i];
                 }
                 //每个点对邻居执行dense_signal
 #pragma omp parallel
                 {
                     int thread_id = omp_get_thread_num();
                     int s_i = get_socket_id(thread_id);
-                    VertexId final_p_v_i = thread_state[thread_id]->end;
+                    VertexId final_p_v_i = gim_thread_state[partition_id][thread_id]->end;
                     while (true) {
                         //线程开始从自己负责的部分开始获取任务
-                        VertexId begin_p_v_i =
-                            __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
+                        VertexId begin_p_v_i = __sync_fetch_and_add(
+                            &gim_thread_state[partition_id][thread_id]->curr, basic_chunk);
                         if (begin_p_v_i >= final_p_v_i) break;
                         VertexId end_p_v_i = begin_p_v_i + basic_chunk;
                         if (end_p_v_i > final_p_v_i) {
@@ -2637,42 +2651,49 @@ public:
                         }
                         for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                             VertexId v_i =
-                                compressed_incoming_adj_index[s_i][p_v_i]
+                                gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i]
                                     .vertex;   //对于s_i socket中的v_i，对所有邻居执行dense_signal
                             dense_signal(
                                 v_i,
                                 VertexAdjList<EdgeData>(
-                                    incoming_adj_list[s_i] +
-                                        compressed_incoming_adj_index[s_i][p_v_i].index,
-                                    incoming_adj_list[s_i] +
-                                        compressed_incoming_adj_index[s_i][p_v_i + 1].index));
+                                    gim_incoming_adj_list[partition_id][s_i] +
+                                        gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i]
+                                            .index,
+                                    gim_incoming_adj_list[partition_id][s_i] +
+                                        gim_compressed_incoming_adj_index[partition_id][s_i]
+                                                                         [p_v_i + 1]
+                                                                             .index));
                         }
                     }
                     //线程窃取
-                    thread_state[thread_id]->status = STEALING;
+                    gim_thread_state[partition_id][thread_id]->status = STEALING;
                     for (int t_offset = 1; t_offset < threads; t_offset++) {
                         int t_i = (thread_id + t_offset) % threads;
                         int s_i = get_socket_id(t_i);
-                        while (thread_state[t_i]->status != STEALING) {
-                            VertexId begin_p_v_i =
-                                __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
-                            if (begin_p_v_i >= thread_state[t_i]->end) break;
+                        while (gim_thread_state[partition_id][t_i]->status != STEALING) {
+                            VertexId begin_p_v_i = __sync_fetch_and_add(
+                                &gim_thread_state[partition_id][t_i]->curr, basic_chunk);
+                            if (begin_p_v_i >= gim_thread_state[partition_id][t_i]->end) break;
                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                            if (end_p_v_i > thread_state[t_i]->end) {
-                                end_p_v_i = thread_state[t_i]->end;
+                            if (end_p_v_i > gim_thread_state[partition_id][t_i]->end) {
+                                end_p_v_i = gim_thread_state[partition_id][t_i]->end;
                             }
                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-                                VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
+                                VertexId v_i =
+                                    gim_compressed_incoming_adj_index[partition_id][s_i][p_v_i]
+                                        .vertex;
                                 dense_signal(
                                     v_i,
                                     VertexAdjList<EdgeData>(
-                                        incoming_adj_list[s_i] +
-                                            compressed_incoming_adj_index[s_i][p_v_i]
-                                                .index,   // s_i出边开始
-                                        incoming_adj_list[s_i] +
-                                            compressed_incoming_adj_index[s_i][p_v_i +
-                                                                               1]   // s_i出边结束
-                                                .index));
+                                        gim_incoming_adj_list[partition_id][s_i] +
+                                            gim_compressed_incoming_adj_index
+                                                [partition_id][s_i][p_v_i]
+                                                    .index,   // s_i出边开始
+                                        gim_incoming_adj_list[partition_id][s_i] +
+                                            gim_compressed_incoming_adj_index[partition_id][s_i]
+                                                                             [p_v_i +
+                                                                              1]   // s_i出边结束
+                                                                                 .index));
                             }
                         }
                     }
@@ -2714,14 +2735,14 @@ public:
                     int s_i = get_socket_id(t_i);
                     int s_j = get_socket_offset(t_i);
                     VertexId partition_size = used_buffer[s_i]->count;
-                    thread_state[t_i]->curr =
+                    gim_thread_state[partition_id][t_i]->curr =
                         partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
-                    thread_state[t_i]->end =
+                    gim_thread_state[partition_id][t_i]->end =
                         partition_size / threads_per_socket / basic_chunk * basic_chunk * (s_j + 1);
                     if (s_j == threads_per_socket - 1) {
-                        thread_state[t_i]->end = used_buffer[s_i]->count;
+                        gim_thread_state[partition_id][t_i]->end = used_buffer[s_i]->count;
                     }
-                    thread_state[t_i]->status = WORKING;
+                    gim_thread_state[partition_id][t_i]->status = WORKING;
                 }
 #pragma omp parallel reduction(+ : reducer)
                 {
@@ -2731,13 +2752,13 @@ public:
                     MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]->data;
                     while (true) {
                         //线程开始从自己负责的部分开始获取任务
-                        VertexId b_i =
-                            __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                        if (b_i >= thread_state[thread_id]->end) break;
+                        VertexId b_i = __sync_fetch_and_add(
+                            &gim_thread_state[partition_id][thread_id]->curr, basic_chunk);
+                        if (b_i >= gim_thread_state[partition_id][thread_id]->end) break;
                         VertexId begin_b_i = b_i;
                         VertexId end_b_i = b_i + basic_chunk;
-                        if (end_b_i > thread_state[thread_id]->end) {
-                            end_b_i = thread_state[thread_id]->end;
+                        if (end_b_i > gim_thread_state[partition_id][thread_id]->end) {
+                            end_b_i = gim_thread_state[partition_id][thread_id]->end;
                         }
                         for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                             VertexId v_i = buffer[b_i].vertex;
@@ -2745,7 +2766,7 @@ public:
                             local_reducer += dense_slot(v_i, msg_data);   //对每个vi执行dense_slot
                         }
                     }
-                    thread_state[thread_id]->status = STEALING;
+                    gim_thread_state[partition_id][thread_id]->status = STEALING;
                     reducer += local_reducer;
                 }
             }
@@ -2765,11 +2786,7 @@ public:
 
         R global_reducer;
         MPI_Datatype dt = get_mpi_data_type<R>();
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
-
-        total_allreduce_time += allreduce_time;
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("process_edges took %lf (s)\n", stream_time);
