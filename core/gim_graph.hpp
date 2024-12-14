@@ -1398,22 +1398,39 @@ public:
         outgoing_edges =
             new EdgeId[sockets];   //存储每个 NUMA
                                    //节点的出边数量，用于分布式图计算时确定每个节点需要处理的边。
-        outgoing_adj_index =
-            new EdgeId*[sockets];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
-        outgoing_adj_list =
-            new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
+        // outgoing_adj_index =
+        //     new EdgeId*[sockets];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
+        gim_outgoing_adj_index = new EdgeId**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_index[p_i][s_i] =
+                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+
+                        // gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
+                        //     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
+                
+            }
+        }
+        outgoing_adj_index = gim_outgoing_adj_index[partition_id];
+
+            outgoing_adj_list =
+                new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
         outgoing_adj_bitmap = new Bitmap*[sockets];   //邻接矩阵位图，判断某个点是否有出边
         for (int s_i = 0; s_i < sockets; s_i++) {
             outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
             outgoing_adj_bitmap[s_i]->clear();
-// for simulate
-#ifdef CXL_SHM
-            outgoing_adj_index[s_i] =
-                (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1), REMOTE_NUMA);
-#else
-            outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
-                                                                 s_i + partition_id * NUMA);
-#endif
+            // for simulate
+            // #ifdef CXL_SHM
+            //             outgoing_adj_index[s_i] =
+            //                 (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
+            //                 REMOTE_NUMA);
+            // #else
+            //             outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) *
+            //             (vertices + 1),
+            //                                                                  s_i + partition_id *
+            //                                                                  NUMA);
+            // #endif
         }
 
 
