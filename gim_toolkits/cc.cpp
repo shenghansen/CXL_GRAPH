@@ -119,13 +119,13 @@ int main(int argc, char ** argv) {
 
   Graph<Empty> * graph;
   graph = new Graph<Empty>();
-  graph->load_undirected_from_directed(argv[1], std::atoi(argv[2]));
+  // graph->load_undirected_from_directed(argv[1], std::atoi(argv[2]));
 
-  compute(graph);
+  // compute(graph);
   // for (int run=0;run<5;run++) {
   //   compute(graph);
   // }
-  printf("partiton_id: %d, total_process_time  =%lf(s)\n",graph->get_partition_id(), graph->print_total_process_time());
+  // printf("partiton_id: %d, total_process_time  =%lf(s)\n",graph->get_partition_id(), graph->print_total_process_time());
   // printf("total allreduce time =%lf(s)\n", graph->print_total_allreduce());
   // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
   delete graph;
