@@ -118,7 +118,6 @@ struct GIMMessageBuffer {
         capacity = size;
         // data = (char*)malloc(capacity);
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
-       
     }
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
@@ -1411,9 +1410,8 @@ public:
                 gim_outgoing_adj_index[p_i][s_i] =
                     (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
 
-                        // gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
-                        //     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
-                
+                // gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
+                //     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
             }
         }
         outgoing_adj_index = gim_outgoing_adj_index[partition_id];
@@ -1436,29 +1434,20 @@ public:
         // outgoing_adj_list =
         //     new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
 
-        gim_outgoing_adj_list = new AdjUnit<EdgeData>**[partitions];
-        for (size_t p_i = 0; p_i < partitions; p_i++) {
-            gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
-            // for (size_t s_i = 0; s_i < sockets; s_i++) {
-            //     // gim_outgoing_adj_list[p_i][s_i] =
-            //     //     (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(global_max);
-            //     gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(global_max);
-            // }
-        }
         // for (int s_i = 0; s_i < sockets; s_i++) {
-            // outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
-            // outgoing_adj_bitmap[s_i]->clear();
-            // for simulate
-            // #ifdef CXL_SHM
-            //             outgoing_adj_index[s_i] =
-            //                 (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
-            //                 REMOTE_NUMA);
-            // #else
-            //             outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) *
-            //             (vertices + 1),
-            //                                                                  s_i + partition_id *
-            //                                                                  NUMA);
-            // #endif
+        // outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
+        // outgoing_adj_bitmap[s_i]->clear();
+        // for simulate
+        // #ifdef CXL_SHM
+        //             outgoing_adj_index[s_i] =
+        //                 (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
+        //                 REMOTE_NUMA);
+        // #else
+        //             outgoing_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) *
+        //             (vertices + 1),
+        //                                                                  s_i + partition_id *
+        //                                                                  NUMA);
+        // #endif
         // }
 
 
@@ -1623,13 +1612,13 @@ public:
             // gim_outgoing_adj_list[partition_id][s_i]= (AdjUnit<EdgeData>*)numa_alloc_onnode(
             //         unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
             // for simulate
-// #ifdef CXL_SHM
-//                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-//                     unit_size * outgoing_edges[s_i], REMOTE_NUMA);
-// #else
-//                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-//                     unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
-// #endif
+            // #ifdef CXL_SHM
+            //                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
+            //                     unit_size * outgoing_edges[s_i], REMOTE_NUMA);
+            // #else
+            //                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
+            //                     unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
+            // #endif
             outgoing_adj_list_size += unit_size * outgoing_edges[s_i];
         }
 
@@ -1652,7 +1641,6 @@ public:
                 //     global_max*unit_size);
             }
         }
-        printf("max_edge:%d\n", global_max);
         outgoing_adj_list = gim_outgoing_adj_list[partition_id];
         // calculate size
         data_size["outgoing_adj_list"] = outgoing_adj_list_size;
@@ -1772,15 +1760,31 @@ public:
         incoming_edges = new EdgeId[sockets];
         incoming_adj_index = new EdgeId*[sockets];
         incoming_adj_list = new AdjUnit<EdgeData>*[sockets];
-        incoming_adj_bitmap = new Bitmap*[sockets];
+        // incoming_adj_bitmap = new Bitmap*[sockets];
 
         for (int s_i = 0; s_i < sockets; s_i++) {
-            incoming_adj_bitmap[s_i] = new Bitmap(vertices);
-            incoming_adj_bitmap[s_i]->clear();
+            // incoming_adj_bitmap[s_i] = new Bitmap(vertices);
+            // incoming_adj_bitmap[s_i]->clear();
             // for simulate
             incoming_adj_index[s_i] = (EdgeId*)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1),
                                                                  s_i + partition_id * NUMA);
         }
+
+
+        gim_incoming_adj_bitmap = new Bitmap**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
+                // unsigned long* data =
+                //     (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
+
+                // unsigned long* data =
+                //     new unsigned long[((WORD_OFFSET(vertices) + 1))];
+                // gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
+            }
+        }
+        incoming_adj_bitmap = gim_incoming_adj_bitmap[partition_id];
 
 
         {
@@ -1883,6 +1887,46 @@ public:
         compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
         size_t incoming_adj_list_size = 0;
         size_t compressed_incoming_adj_index_size = 0;
+
+        // init incoming_edges and compressed_incoming_adj_vertices
+        for (int s_i = 0; s_i < sockets; s_i++) {   //遍历numa
+            incoming_edges[s_i] = 0;
+            compressed_incoming_adj_vertices[s_i] = 0;
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {                //遍历所有的点
+                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              //如果dst有入边
+                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   //每个socket的入边总数
+                    compressed_incoming_adj_vertices[s_i] += 1;            //有入边的点数
+                }
+            }
+        }
+        int max_compressed_incoming_adj_vertices = 0;
+        for (size_t i = 0; i < sockets; i++) {
+            max_compressed_incoming_adj_vertices =
+                max_compressed_incoming_adj_vertices > compressed_incoming_adj_vertices[i]
+                    ? max_compressed_incoming_adj_vertices
+                    : compressed_incoming_adj_vertices[i];
+        }
+
+        MPI_Allreduce(&max_compressed_incoming_adj_vertices,
+                      &global_max,
+                      1,
+                      MPI_INT,
+                      MPI_MAX,
+                      MPI_COMM_WORLD);
+
+        gim_compressed_incoming_adj_index = new CompressedAdjIndexUnit**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_incoming_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_incoming_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        (global_max + 1) * sizeof(CompressedAdjIndexUnit));
+                // gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(
+                //     global_max*unit_size);
+            }
+        }
+        compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
+
         for (int s_i = 0; s_i < sockets; s_i++) {   //遍历numa
             incoming_edges[s_i] = 0;
             compressed_incoming_adj_vertices[s_i] = 0;
@@ -1893,18 +1937,15 @@ public:
                 }
             }
             // for simulate
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
-#ifdef CXL_SHM
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                REMOTE_NUMA);
-#else
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
-#endif
+// #ifdef CXL_SHM
+//             compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+//                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
+//                 REMOTE_NUMA);
+// #else
+//             compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+//                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
+//                 s_i + partition_id * NUMA);
+// #endif
             compressed_incoming_adj_index_size +=
                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1);
             compressed_incoming_adj_index[s_i][0].index = 0;
@@ -1931,17 +1972,28 @@ public:
             printf(
                 "part(%d) E_%d has %lu dense mode edges\n", partition_id, s_i, incoming_edges[s_i]);
 #endif
-            // for simulate
-#ifdef CXL_SHM
-            incoming_adj_list[s_i] =
-                (AdjUnit<EdgeData>*)numa_alloc_onnode(unit_size * incoming_edges[s_i], REMOTE_NUMA);
-#else
-            incoming_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-                unit_size * incoming_edges[s_i], s_i + partition_id * NUMA);
-#endif
-
             incoming_adj_list_size += unit_size * incoming_edges[s_i];
         }
+        int max_incoming_edges = 0;
+        for (size_t i = 0; i < sockets; i++) {
+            max_incoming_edges =
+                max_incoming_edges > incoming_edges[i] ? max_incoming_edges : incoming_edges[i];
+        }
+        global_max;
+        MPI_Allreduce(&max_incoming_edges, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+
+
+        gim_incoming_adj_list = new AdjUnit<EdgeData>**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_incoming_adj_list[p_i][s_i] =
+                    (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(global_max * unit_size);
+                // gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(
+                //     global_max*unit_size);
+            }
+        }
+        incoming_adj_list = gim_incoming_adj_list[partition_id];
         data_size["incoming_adj_list"] = incoming_adj_list_size;
         data_size["compressed_incoming_adj_index"] = compressed_incoming_adj_index_size;
         // if (partition_id==0) {
