@@ -1775,13 +1775,13 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
-                // unsigned long* data =
-                //     (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
+                // gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
+                unsigned long* data =
+                    (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
 
                 // unsigned long* data =
                 //     new unsigned long[((WORD_OFFSET(vertices) + 1))];
-                // gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
+                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
             }
         }
         incoming_adj_bitmap = gim_incoming_adj_bitmap[partition_id];
