@@ -133,6 +133,6 @@ int main(int argc, char ** argv) {
   //   compute(graph, root);
   // }
 
-  delete graph;
+//   delete graph;
   return 0;
 }

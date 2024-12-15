@@ -116,12 +116,16 @@ struct GIMMessageBuffer {
     }
     void init(size_t size) {
         capacity = size;
+        // data = (char*)malloc(capacity);
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
+       
     }
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
+            printf("resize\n\n");
             ERROR("out of capacity");
             char* new_data = (char*)cxl_shm->GIM_malloc(new_capacity * 10, host_id, numa_id);
+            // char* new_data = (char*)malloc(new_capacity);
             assert(new_data != NULL);
             data = new_data;
             capacity = new_capacity;
@@ -1413,13 +1417,37 @@ public:
             }
         }
         outgoing_adj_index = gim_outgoing_adj_index[partition_id];
+        // outgoing_adj_bitmap = new Bitmap*[sockets];
+        gim_outgoing_adj_bitmap = new Bitmap**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
+                // unsigned long* data =
+                //     (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
 
-            outgoing_adj_list =
-                new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
-        outgoing_adj_bitmap = new Bitmap*[sockets];   //邻接矩阵位图，判断某个点是否有出边
-        for (int s_i = 0; s_i < sockets; s_i++) {
-            outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
-            outgoing_adj_bitmap[s_i]->clear();
+                // unsigned long* data =
+                //     new unsigned long[((WORD_OFFSET(vertices) + 1))];
+                // gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
+            }
+        }
+        outgoing_adj_bitmap = gim_outgoing_adj_bitmap[partition_id];
+
+        // outgoing_adj_list =
+        //     new AdjUnit<EdgeData>*[sockets];   //邻接表数组，存储每个顶点的出边列表。
+
+        gim_outgoing_adj_list = new AdjUnit<EdgeData>**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            // for (size_t s_i = 0; s_i < sockets; s_i++) {
+            //     // gim_outgoing_adj_list[p_i][s_i] =
+            //     //     (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(global_max);
+            //     gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(global_max);
+            // }
+        }
+        // for (int s_i = 0; s_i < sockets; s_i++) {
+            // outgoing_adj_bitmap[s_i] = new Bitmap(vertices);
+            // outgoing_adj_bitmap[s_i]->clear();
             // for simulate
             // #ifdef CXL_SHM
             //             outgoing_adj_index[s_i] =
@@ -1431,7 +1459,7 @@ public:
             //                                                                  s_i + partition_id *
             //                                                                  NUMA);
             // #endif
-        }
+        // }
 
 
         {
@@ -1591,16 +1619,41 @@ public:
                    s_i,
                    outgoing_edges[s_i]);
 #endif
+
+            // gim_outgoing_adj_list[partition_id][s_i]= (AdjUnit<EdgeData>*)numa_alloc_onnode(
+            //         unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
             // for simulate
-#ifdef CXL_SHM
-            outgoing_adj_list[s_i] =
-                (AdjUnit<EdgeData>*)numa_alloc_onnode(unit_size * outgoing_edges[s_i], REMOTE_NUMA);
-#else
-            outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
-                unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
-#endif
+// #ifdef CXL_SHM
+//                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
+//                     unit_size * outgoing_edges[s_i], REMOTE_NUMA);
+// #else
+//                 outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
+//                     unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
+// #endif
             outgoing_adj_list_size += unit_size * outgoing_edges[s_i];
         }
+
+        int max_out_going_edges = 0;
+        for (size_t i = 0; i < sockets; i++) {
+            max_out_going_edges =
+                max_out_going_edges > outgoing_edges[i] ? max_out_going_edges : outgoing_edges[i];
+        }
+        int global_max;
+        MPI_Allreduce(&max_out_going_edges, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+
+
+        gim_outgoing_adj_list = new AdjUnit<EdgeData>**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_list[p_i][s_i] =
+                    (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(global_max * unit_size);
+                // gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(
+                //     global_max*unit_size);
+            }
+        }
+        printf("max_edge:%d\n", global_max);
+        outgoing_adj_list = gim_outgoing_adj_list[partition_id];
         // calculate size
         data_size["outgoing_adj_list"] = outgoing_adj_list_size;
         data_size["compressed_outgoing_adj_index"] = compressed_outgoing_adj_index_size;

@@ -29,17 +29,20 @@ public:
     data = new unsigned long[WORD_OFFSET(size) + 1];
     clear();
   }
-  ~Bitmap() { delete[] data; }
+  Bitmap(size_t size,unsigned long *data) : size(size),data(data) {
+      clear();
+  }
+  // ~Bitmap() { delete[] data; }
   void clear() {
     size_t bm_size = WORD_OFFSET(size);
-#pragma omp parallel for
+// #pragma omp parallel for
     for (size_t i = 0; i <= bm_size; i++) {
       data[i] = 0;
     }
   }
   void fill() {
     size_t bm_size = WORD_OFFSET(size);
-#pragma omp parallel for
+// #pragma omp parallel for
     for (size_t i = 0; i < bm_size; i++) {
       data[i] = 0xffffffffffffffff;
     }

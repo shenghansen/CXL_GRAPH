@@ -11,7 +11,7 @@ add_subdirectory("Gimulator")
 
 add_definitions(-DSTATISTICS)
 
-set(CMAKE_CXX_FLAGS " -w -std=c++17 -g -fopenmp -march=native")
+set(CMAKE_CXX_FLAGS " -fsanitize=address -w -std=c++17 -g -fopenmp -march=native")
 set(TARGETS bc bfs cc pagerank sssp )
 # set(GIM_TARGETS gim_bc gim_bfs gim_cc gim_pagerank gim_sssp)
 file(GLOB HEADERS "core/*.hpp")
