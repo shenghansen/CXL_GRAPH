@@ -141,22 +141,22 @@ template<typename EdgeData = Empty> class Graph {
     /* 后面注释带partitions的就是全局多节点数据，只带threads的就是节点内多线程数据 */
 public:
     std::unordered_map<std::string, size_t> data_size;
-    int partition_id;   //自己所属的分区id
-    int partitions;     //总分区数
+    int partition_id;   // 自己所属的分区id
+    int partitions;     // 总分区数
 
-    size_t alpha;   //分块系数
+    size_t alpha;   // 分块系数
 
-    int threads;              //单节点内总线程数
+    int threads;              // 单节点内总线程数
     int sockets;              // socket数
-    int threads_per_socket;   //每个socket的线程数
+    int threads_per_socket;   // 每个socket的线程数
 
     size_t edge_data_size;   // edge_data的大小
     size_t unit_size;        // adj_unit的大小
     size_t edge_unit_size;   // edge_unit的大小
 
-    bool symmetric;      //图是否对称?无向图
-    VertexId vertices;   //点数
-    EdgeId edges;        //边数
+    bool symmetric;      // 图是否对称?无向图
+    VertexId vertices;   // 点数
+    EdgeId edges;        // 边数
     VertexId*
         out_degree;   // VertexId [vertices]; numa-interleaved 稠密模式下每个host内master点的出度
     VertexId*
@@ -168,7 +168,7 @@ public:
     VertexId*
         local_partition_offset;   // VertexId [sockets+1]  记录本地分区的索引,即本地分区起始顶点的ID
 
-    VertexId owned_vertices;   //本分区拥有多少点
+    VertexId owned_vertices;   // 本分区拥有多少点
     EdgeId* outgoing_edges;    // EdgeId [sockets] 稀疏模式下每个socket内出边总数
     EdgeId* incoming_edges;    // EdgeId [sockets] 稠密模式下每个socket内入边总数
 
@@ -185,7 +185,7 @@ public:
     AdjUnit<EdgeData>**
         outgoing_adj_list;   // AdjUnit<EdgeData> [sockets] [该socket点的内出边总数]; numa-aware
                              // 每个socket内每条出边的dst
-    //压缩 graph data
+    // 压缩 graph data
     VertexId*
         compressed_incoming_adj_vertices;   // VertexId[socket] 稀疏模式下每个socket有入边的点的数量
     CompressedAdjIndexUnit**
@@ -204,13 +204,13 @@ public:
                                          // vertex用来表示出边的src，即哪些点有出边
 
     ThreadState** thread_state;   // ThreadState* [threads]; numa-aware
-    //在tune_chunk中初始化 在process_vertices中使用
-    //设置两个tuned_chunks的意义是为了应对transpose操作，不transpose就是tuned_chunks_dense
-    // transpose就是tuned_chunks_sparse
+    // 在tune_chunk中初始化 在process_vertices中使用
+    // 设置两个tuned_chunks的意义是为了应对transpose操作，不transpose就是tuned_chunks_dense
+    //  transpose就是tuned_chunks_sparse
     ThreadState** tuned_chunks_dense;    // ThreadState [partitions][threads];
     ThreadState** tuned_chunks_sparse;   // ThreadState [partitions][threads];
 
-    //每个线程自己的发送缓冲，先写到这里再一下刷到全局的send_buffer中，这也是利用局部性
+    // 每个线程自己的发送缓冲，先写到这里再一下刷到全局的send_buffer中，这也是利用局部性
     size_t local_send_buffer_limit;
     MessageBuffer** local_send_buffer;   // MessageBuffer* [threads]; numa-aware
 
@@ -489,14 +489,10 @@ public:
             }
         }
     }
-    double print_total_allreduce() {
-        return total_allreduce_time;
-    }
+    double print_total_allreduce() { return total_allreduce_time; }
 
 
-    double print_total_process_time() {
-        return total_process_time;
-    }
+    double print_total_process_time() { return total_process_time; }
     // fill a vertex array with a specific value
     template<typename T> void fill_vertex_array(T* array, T value) {
 #pragma omp parallel for
@@ -512,8 +508,8 @@ public:
         char* array = (char*)mmap(
             NULL, sizeof(T) * vertices, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         assert(array != NULL);
-        //需要连续的点数组，所以先分配内存再迁移到numa，而不是直接在numa上分配
-        // for simulate
+        // 需要连续的点数组，所以先分配内存再迁移到numa，而不是直接在numa上分配
+        //  for simulate
         for (int s_i = 0; s_i < sockets; s_i++) {
             numa_tonode_memory(
                 array + sizeof(T) * local_partition_offset[s_i],
@@ -617,11 +613,9 @@ public:
     }
 
     // allocate a vertex subset
-    VertexSubset* alloc_vertex_subset() {
-        return new VertexSubset(vertices);
-    }
+    VertexSubset* alloc_vertex_subset() { return new VertexSubset(vertices); }
 
-    //根据点的index得到这个点所在分区（全局）的index
+    // 根据点的index得到这个点所在分区（全局）的index
     int get_partition_id(VertexId v_i) {
         for (int i = 0; i < partitions; i++) {
             if (v_i >= partition_offset[i] && v_i < partition_offset[i + 1]) {
@@ -630,7 +624,7 @@ public:
         }
         assert(false);
     }
-    //根据点的index得到这个点所在分区（本地）的index
+    // 根据点的index得到这个点所在分区（本地）的index
     int get_local_partition_id(VertexId v_i) {
         for (int s_i = 0; s_i < sockets; s_i++) {
             if (v_i >= local_partition_offset[s_i] && v_i < local_partition_offset[s_i + 1]) {
@@ -1203,18 +1197,18 @@ public:
             printf("|V| = %u, |E| = %lu\n", vertices, edges);
         }
 #endif
-        //计算每个分区平均读多少条边
+        // 计算每个分区平均读多少条边
         EdgeId read_edges = edges / partitions;
         if (partition_id == partitions - 1) {
             read_edges += edges % partitions;
         }
-        long bytes_to_read = edge_unit_size * read_edges;   //每个分区读的字节数
+        long bytes_to_read = edge_unit_size * read_edges;   // 每个分区读的字节数
         long read_offset =
-            edge_unit_size * (edges / partitions * partition_id);   //从文件的哪个地方开始读
-        long read_bytes;                                            //已经读的字节数
+            edge_unit_size * (edges / partitions * partition_id);   // 从文件的哪个地方开始读
+        long read_bytes;                                            // 已经读的字节数
         int fin = open(path.c_str(), O_RDONLY);
         EdgeUnit<EdgeData>* read_edge_buffer =
-            new EdgeUnit<EdgeData>[CHUNKSIZE];   //将边的数据读到这里
+            new EdgeUnit<EdgeData>[CHUNKSIZE];   // 将边的数据读到这里
 
         out_degree = alloc_interleaved_vertex_array<VertexId>();
         for (VertexId v_i = 0; v_i < vertices; v_i++) {
@@ -1222,7 +1216,7 @@ public:
         }
         assert(lseek(fin, read_offset, SEEK_SET) == read_offset);
         read_bytes = 0;
-        //每次读一个CHUNKSIZE的边，读边是为了计算点的出度
+        // 每次读一个CHUNKSIZE的边，读边是为了计算点的出度
         while (read_bytes < bytes_to_read) {
             long curr_read_bytes;
             if (bytes_to_read - read_bytes > edge_unit_size * CHUNKSIZE) {
@@ -1237,7 +1231,7 @@ public:
             for (EdgeId e_i = 0; e_i < curr_read_edges; e_i++) {
                 VertexId src = read_edge_buffer[e_i].src;
                 VertexId dst = read_edge_buffer[e_i].dst;
-                __sync_fetch_and_add(&out_degree[src], 1);   //每个节点都更新每个点的出度
+                __sync_fetch_and_add(&out_degree[src], 1);   // 每个节点都更新每个点的出度
             }
         }
         allreduce_time -= MPI_Wtime();
@@ -1246,11 +1240,11 @@ public:
                       vertices,
                       vid_t,
                       MPI_SUM,
-                      MPI_COMM_WORLD);   //更新全局的点的出度
-        allreduce_time += MPI_Wtime();   //读完全部的边
+                      MPI_COMM_WORLD);   // 更新全局的点的出度
+        allreduce_time += MPI_Wtime();   // 读完全部的边
 
-        //进行分区，确定每个节点上面的master边
-        // locality-aware chunking
+        // 进行分区，确定每个节点上面的master边
+        //  locality-aware chunking
         partition_offset = new VertexId[partitions + 1];
         partition_offset[0] = 0;
         EdgeId remained_amount = edges + EdgeId(vertices) * alpha;
@@ -1277,10 +1271,10 @@ public:
         }
         assert(partition_offset[partitions] == vertices);
         owned_vertices = partition_offset[partition_id + 1] -
-                         partition_offset[partition_id];   //更新本节点拥有的点
+                         partition_offset[partition_id];   // 更新本节点拥有的点
 
-        //如果有节点计算结果不同，利用allreduce来保证每个节点上partition_offset是相同的
-        // check consistency of partition boundaries
+        // 如果有节点计算结果不同，利用allreduce来保证每个节点上partition_offset是相同的
+        //  check consistency of partition boundaries
         VertexId* global_partition_offset = new VertexId[partitions + 1];
         allreduce_time -= MPI_Wtime();
         MPI_Allreduce(partition_offset,
@@ -1322,7 +1316,7 @@ public:
 #endif
         delete[] global_partition_offset;
 
-        //跟上面类似，计算每个numa的点的范围
+        // 跟上面类似，计算每个numa的点的范围
         {
             // NUMA-aware sub-chunking
             local_partition_offset = new VertexId[sockets + 1];
@@ -1372,14 +1366,15 @@ public:
             }
         }
         // 确保每个分区只处理与其相关的顶点和边信息
-        VertexId* filtered_out_degree = alloc_vertex_array<VertexId>();   //每个节点内自己的点的出度
+        VertexId* filtered_out_degree =
+            alloc_vertex_array<VertexId>();   // 每个节点内自己的点的出度
         for (VertexId v_i = partition_offset[partition_id];
              v_i < partition_offset[partition_id + 1];
              v_i++) {
             filtered_out_degree[v_i] = out_degree[v_i];
         }
         numa_free(out_degree, sizeof(VertexId) * vertices);
-        out_degree = filtered_out_degree;   //现在开始出度只记录自己节点的出度
+        out_degree = filtered_out_degree;   // 现在开始出度只记录自己节点的出度
         in_degree = alloc_vertex_array<VertexId>();
         for (VertexId v_i = partition_offset[partition_id];
              v_i < partition_offset[partition_id + 1];
@@ -1389,18 +1384,18 @@ public:
 
         int* buffered_edges = new int[partitions];
         std::vector<char>* send_buffer =
-            new std::vector<char>[partitions];   //每个分区partitions个sendbuffer
+            new std::vector<char>[partitions];   // 每个分区partitions个sendbuffer
         for (int i = 0; i < partitions; i++) {
             send_buffer[i].resize(edge_unit_size * CHUNKSIZE);
         }
         EdgeUnit<EdgeData>* recv_buffer =
-            new EdgeUnit<EdgeData>[CHUNKSIZE];   //每个全局分区一个recvbuffer
+            new EdgeUnit<EdgeData>[CHUNKSIZE];   // 每个全局分区一个recvbuffer
 
-        //每个节点内自己的数据，numa-aware
+        // 每个节点内自己的数据，numa-aware
         EdgeId recv_outgoing_edges = 0;
         outgoing_edges =
-            new EdgeId[sockets];   //存储每个 NUMA
-                                   //节点的出边数量，用于分布式图计算时确定每个节点需要处理的边。
+            new EdgeId[sockets];   // 存储每个 NUMA
+                                   // 节点的出边数量，用于分布式图计算时确定每个节点需要处理的边。
         // outgoing_adj_index =
         //     new EdgeId*[sockets];   //邻接表索引数组，存储每个顶点的出边列表起始位置和结束位置。
         gim_outgoing_adj_index = new EdgeId**[partitions];
@@ -1420,13 +1415,14 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
+                // gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
+                unsigned long* data =
+                    (unsigned long*)cxl_shm->GIM_malloc(sizeof(unsigned long)*(WORD_OFFSET(vertices) + 1), p_i);
                 // unsigned long* data =
-                //     (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
+                //     (unsigned long*)cxl_shm->CXL_SHM_malloc((WORD_OFFSET(vertices) + 1));
 
-                // unsigned long* data =
-                //     new unsigned long[((WORD_OFFSET(vertices) + 1))];
-                // gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
+                // unsigned long* data = new unsigned long[((WORD_OFFSET(vertices) + 1))];
+                gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
             }
         }
         outgoing_adj_bitmap = gim_outgoing_adj_bitmap[partition_id];
@@ -1452,8 +1448,8 @@ public:
 
 
         {
-            //接受线程接受所有其他一级分区的边，更新numa的CSR格式和每个节点内点的入度
-            //这里更新的是mirror点的CSR信息
+            // 接受线程接受所有其他一级分区的边，更新numa的CSR格式和每个节点内点的入度
+            // 这里更新的是mirror点的CSR信息
             std::thread recv_thread_dst([&]() {
                 int finished_count = 0;
                 MPI_Status recv_status;
@@ -1483,19 +1479,19 @@ public:
                     for (EdgeId e_i = 0; e_i < recv_edges; e_i++) {
                         VertexId src = recv_buffer[e_i].src;
                         VertexId dst = recv_buffer[e_i].dst;
-                        //如果其他节点的发过来的边里面，dst在本节点的话，就更新本节点内mirror点的bitmap
-                        // index(应该有的是mirror，有的是master，只能确定dst一定是master)
+                        // 如果其他节点的发过来的边里面，dst在本节点的话，就更新本节点内mirror点的bitmap
+                        //  index(应该有的是mirror，有的是master，只能确定dst一定是master)
                         assert(dst >= partition_offset[partition_id] &&
                                dst < partition_offset[partition_id + 1]);
-                        int dst_part = get_local_partition_id(dst);   //找到点所在在numa的id
-                        //检查并更新位图,更新邻接索引和入度
+                        int dst_part = get_local_partition_id(dst);   // 找到点所在在numa的id
+                        // 检查并更新位图,更新邻接索引和入度
                         if (!outgoing_adj_bitmap[dst_part]->get_bit(src)) {
-                            outgoing_adj_bitmap[dst_part]->set_bit(src);   //该点存在出边
+                            outgoing_adj_bitmap[dst_part]->set_bit(src);   // 该点存在出边
                             outgoing_adj_index[dst_part][src] = 0;
                         }
                         __sync_fetch_and_add(&outgoing_adj_index[dst_part][src],
-                                             1);                    //每个socket内src的出边数
-                        __sync_fetch_and_add(&in_degree[dst], 1);   //更新每个节点内master点的入度
+                                             1);   // 每个socket内src的出边数
+                        __sync_fetch_and_add(&in_degree[dst], 1);   // 更新每个节点内master点的入度
                     }
                     recv_outgoing_edges += recv_edges;
                 }
@@ -1506,7 +1502,7 @@ public:
             }
             assert(lseek(fin, read_offset, SEEK_SET) == read_offset);
             read_bytes = 0;
-            //每次读一个CHUNKSIZE的边，读边是为了计算点的出度
+            // 每次读一个CHUNKSIZE的边，读边是为了计算点的出度
             while (read_bytes < bytes_to_read) {
                 long curr_read_bytes;
                 if (bytes_to_read - read_bytes > edge_unit_size * CHUNKSIZE) {
@@ -1517,7 +1513,7 @@ public:
                 assert(curr_read_bytes >= 0);
                 read_bytes += curr_read_bytes;
                 EdgeId curr_read_edges = curr_read_bytes / edge_unit_size;
-                //把读到每条边 根据其dst顶点发送到 所属的一级分区
+                // 把读到每条边 根据其dst顶点发送到 所属的一级分区
                 for (EdgeId e_i = 0; e_i < curr_read_edges; e_i++) {
                     VertexId dst = read_edge_buffer[e_i].dst;
                     int i = get_partition_id(dst);
@@ -1526,7 +1522,7 @@ public:
                            edge_unit_size);
                     buffered_edges[i] += 1;
                     if (buffered_edges[i] ==
-                        CHUNKSIZE) {   //达到CHUNKSIZE就发送，因为sendbuffer的大小就是边大小乘CHUNKSIZE
+                        CHUNKSIZE) {   // 达到CHUNKSIZE就发送，因为sendbuffer的大小就是边大小乘CHUNKSIZE
                         MPI_Send(send_buffer[i].data(),
                                  edge_unit_size * buffered_edges[i],
                                  MPI_CHAR,
@@ -1537,7 +1533,7 @@ public:
                     }
                 }
             }
-            //继续发送send_buffer还没发完的数据
+            // 继续发送send_buffer还没发完的数据
             for (int i = 0; i < partitions; i++) {
                 if (buffered_edges[i] == 0) continue;
                 MPI_Send(send_buffer[i].data(),
@@ -1548,8 +1544,8 @@ public:
                          MPI_COMM_WORLD);
                 buffered_edges[i] = 0;
             }
-            //最后发\0表示已经发完
-            // TODO:
+            // 最后发\0表示已经发完
+            //  TODO:
             for (int i = 0; i < partitions; i++) {
                 char c = 0;
                 MPI_Send(&c, 1, MPI_CHAR, i, ShuffleGraph, MPI_COMM_WORLD);
@@ -1564,13 +1560,13 @@ public:
         compressed_outgoing_adj_index = new CompressedAdjIndexUnit*[sockets];
         size_t compressed_outgoing_adj_index_size = 0;
         size_t outgoing_adj_list_size = 0;
-        for (int s_i = 0; s_i < sockets; s_i++) {   //遍历每个numa
-            outgoing_edges[s_i] = 0;                //每个numa numa的出边数
+        for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历每个numa
+            outgoing_edges[s_i] = 0;                // 每个numa numa的出边数
             compressed_outgoing_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {   //遍历所有的点
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {   // 遍历所有的点
                 if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
-                    outgoing_edges[s_i] += outgoing_adj_index[s_i][v_i];   //每个socket出边总数
-                    compressed_outgoing_adj_vertices[s_i] += 1;            //有出边的点数
+                    outgoing_edges[s_i] += outgoing_adj_index[s_i][v_i];   // 每个socket出边总数
+                    compressed_outgoing_adj_vertices[s_i] += 1;            // 有出边的点数
                 }
             }
             // for simulate
@@ -1583,7 +1579,7 @@ public:
             EdgeId last_e_i = 0;
             compressed_outgoing_adj_vertices[s_i] = 0;
             for (VertexId v_i = 0; v_i < vertices; v_i++) {
-                if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {   //如果mirror v_i有出边
+                if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {   // 如果mirror v_i有出边
                     outgoing_adj_index[s_i][v_i] = last_e_i + outgoing_adj_index[s_i][v_i];
                     last_e_i = outgoing_adj_index[s_i][v_i];
                     compressed_outgoing_adj_index[s_i][compressed_outgoing_adj_vertices[s_i]]
@@ -1594,10 +1590,10 @@ public:
                 }
             }
             for (VertexId p_v_i = 0; p_v_i < compressed_outgoing_adj_vertices[s_i];
-                 p_v_i++) {   //对于socket内每一条出边
+                 p_v_i++) {   // 对于socket内每一条出边
                 VertexId v_i = compressed_outgoing_adj_index[s_i][p_v_i].vertex;   // master点
-                //利用compressed_outgoing_adj_index出边的索引重新更新outgoing_adj_index的索引
-                //前面的代码中outgoing_adj_index记录的不是索引，而是出边数，现在才是真正的索引，你是会写代码的
+                // 利用compressed_outgoing_adj_index出边的索引重新更新outgoing_adj_index的索引
+                // 前面的代码中outgoing_adj_index记录的不是索引，而是出边数，现在才是真正的索引，你是会写代码的
                 outgoing_adj_index[s_i][v_i] = compressed_outgoing_adj_index[s_i][p_v_i].index;
                 outgoing_adj_index[s_i][v_i + 1] =
                     compressed_outgoing_adj_index[s_i][p_v_i + 1].index;
@@ -1682,12 +1678,12 @@ public:
                         VertexId dst = recv_buffer[e_i].dst;
                         assert(dst >= partition_offset[partition_id] &&
                                dst <
-                                   partition_offset[partition_id + 1]);   //如果dst是本host的master
+                                   partition_offset[partition_id + 1]);   // 如果dst是本host的master
                         int dst_part = get_local_partition_id(dst);
                         EdgeId pos = __sync_fetch_and_add(&outgoing_adj_index[dst_part][src], 1);
-                        outgoing_adj_list[dst_part][pos].neighbour = dst;   //每个socket内
+                        outgoing_adj_list[dst_part][pos].neighbour = dst;   // 每个socket内
                         if (!std::is_same<EdgeData,
-                                          Empty>::value) {   //如果EdgeData不是空要初始化edge_data
+                                          Empty>::value) {   // 如果EdgeData不是空要初始化edge_data
                             outgoing_adj_list[dst_part][pos].edge_data = recv_buffer[e_i].edge_data;
                         }
                     }
@@ -1710,7 +1706,7 @@ public:
                 EdgeId curr_read_edges = curr_read_bytes / edge_unit_size;
                 for (EdgeId e_i = 0; e_i < curr_read_edges; e_i++) {
                     VertexId dst = read_edge_buffer[e_i].dst;
-                    int i = get_partition_id(dst);   //跟上面一样也是发送边到dst所在节点
+                    int i = get_partition_id(dst);   // 跟上面一样也是发送边到dst所在节点
                     memcpy(send_buffer[i].data() + edge_unit_size * buffered_edges[i],
                            &read_edge_buffer[e_i],
                            edge_unit_size);
@@ -1726,7 +1722,7 @@ public:
                     }
                 }
             }
-            //发送没发完的
+            // 发送没发完的
             for (int i = 0; i < partitions; i++) {
                 if (buffered_edges[i] == 0) continue;
                 MPI_Send(send_buffer[i].data(),
@@ -1743,7 +1739,7 @@ public:
             }
             recv_thread_dst.join();
         }
-        //因为上面用outgoing_adj_index做别的用途，值改变了，这里重新赋回来，可读性极差的写法！
+        // 因为上面用outgoing_adj_index做别的用途，值改变了，这里重新赋回来，可读性极差的写法！
         for (int s_i = 0; s_i < sockets; s_i++) {
             for (VertexId p_v_i = 0; p_v_i < compressed_outgoing_adj_vertices[s_i]; p_v_i++) {
                 VertexId v_i = compressed_outgoing_adj_index[s_i][p_v_i].vertex;
@@ -1776,12 +1772,9 @@ public:
             gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
                 // gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
-                unsigned long* data =
-                    (unsigned long*)cxl_shm->GIM_malloc((WORD_OFFSET(vertices) + 1), p_i);
-
-                // unsigned long* data =
-                //     new unsigned long[((WORD_OFFSET(vertices) + 1))];
-                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices,data);
+                unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+                    sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
             }
         }
         incoming_adj_bitmap = gim_incoming_adj_bitmap[partition_id];
@@ -1818,12 +1811,12 @@ public:
                         VertexId src = recv_buffer[e_i].src;
                         VertexId dst = recv_buffer[e_i].dst;
                         assert(src >= partition_offset[partition_id] &&
-                               src < partition_offset[partition_id + 1]);   //本host内master的出边
+                               src < partition_offset[partition_id + 1]);   // 本host内master的出边
                         int src_part = get_local_partition_id(src);
                         // mirror的入边
                         if (!incoming_adj_bitmap[src_part]->get_bit(dst)) {
-                            incoming_adj_bitmap[src_part]->set_bit(dst);   //该dst存在入边
-                            incoming_adj_index[src_part][dst] = 0;   //记录dst入边的数量
+                            incoming_adj_bitmap[src_part]->set_bit(dst);   // 该dst存在入边
+                            incoming_adj_index[src_part][dst] = 0;   // 记录dst入边的数量
                         }
                         __sync_fetch_and_add(&incoming_adj_index[src_part][dst], 1);
                     }
@@ -1863,7 +1856,7 @@ public:
                     }
                 }
             }
-            //发送剩下的边
+            // 发送剩下的边
             for (int i = 0; i < partitions; i++) {
                 if (buffered_edges[i] == 0) continue;
                 MPI_Send(send_buffer[i].data(),
@@ -1889,13 +1882,13 @@ public:
         size_t compressed_incoming_adj_index_size = 0;
 
         // init incoming_edges and compressed_incoming_adj_vertices
-        for (int s_i = 0; s_i < sockets; s_i++) {   //遍历numa
+        for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历numa
             incoming_edges[s_i] = 0;
             compressed_incoming_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {                //遍历所有的点
-                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              //如果dst有入边
-                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   //每个socket的入边总数
-                    compressed_incoming_adj_vertices[s_i] += 1;            //有入边的点数
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {                // 遍历所有的点
+                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              // 如果dst有入边
+                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   // 每个socket的入边总数
+                    compressed_incoming_adj_vertices[s_i] += 1;            // 有入边的点数
                 }
             }
         }
@@ -1927,32 +1920,35 @@ public:
         }
         compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
 
-        for (int s_i = 0; s_i < sockets; s_i++) {   //遍历numa
+        for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历numa
             incoming_edges[s_i] = 0;
             compressed_incoming_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {                //遍历所有的点
-                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              //如果dst有入边
-                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   //每个socket的入边总数
-                    compressed_incoming_adj_vertices[s_i] += 1;            //有入边的点数
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {                // 遍历所有的点
+                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {              // 如果dst有入边
+                    incoming_edges[s_i] += incoming_adj_index[s_i][v_i];   // 每个socket的入边总数
+                    compressed_incoming_adj_vertices[s_i] += 1;            // 有入边的点数
                 }
             }
             // for simulate
-// #ifdef CXL_SHM
-//             compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-//                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-//                 REMOTE_NUMA);
-// #else
-//             compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-//                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1),
-//                 s_i + partition_id * NUMA);
-// #endif
+            // #ifdef CXL_SHM
+            //             compressed_incoming_adj_index[s_i] =
+            //             (CompressedAdjIndexUnit*)numa_alloc_onnode(
+            //                 sizeof(CompressedAdjIndexUnit) *
+            //                 (compressed_incoming_adj_vertices[s_i] + 1), REMOTE_NUMA);
+            // #else
+            //             compressed_incoming_adj_index[s_i] =
+            //             (CompressedAdjIndexUnit*)numa_alloc_onnode(
+            //                 sizeof(CompressedAdjIndexUnit) *
+            //                 (compressed_incoming_adj_vertices[s_i] + 1), s_i + partition_id *
+            //                 NUMA);
+            // #endif
             compressed_incoming_adj_index_size +=
                 sizeof(CompressedAdjIndexUnit) * (compressed_incoming_adj_vertices[s_i] + 1);
             compressed_incoming_adj_index[s_i][0].index = 0;
             EdgeId last_e_i = 0;
             compressed_incoming_adj_vertices[s_i] = 0;
-            for (VertexId v_i = 0; v_i < vertices; v_i++) {     //遍历所有的点
-                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {   //如果dst有入边
+            for (VertexId v_i = 0; v_i < vertices; v_i++) {     // 遍历所有的点
+                if (incoming_adj_bitmap[s_i]->get_bit(v_i)) {   // 如果dst有入边
                     incoming_adj_index[s_i][v_i] = last_e_i + incoming_adj_index[s_i][v_i];
                     last_e_i = incoming_adj_index[s_i][v_i];
                     compressed_incoming_adj_index[s_i][compressed_incoming_adj_vertices[s_i]]
@@ -2075,7 +2071,7 @@ public:
                     }
                 }
             }
-            //发送没发完的
+            // 发送没发完的
             for (int i = 0; i < partitions; i++) {
                 if (buffered_edges[i] == 0) continue;
                 MPI_Send(send_buffer[i].data(),
@@ -2125,22 +2121,22 @@ public:
 #endif
     }
 
-    //为线程分配chunk工作块，确定每个线程负责哪些点
+    // 为线程分配chunk工作块，确定每个线程负责哪些点
     void tune_chunks() {
         tuned_chunks_dense = new ThreadState*[partitions];
         int current_send_part_id = partition_id;
-        for (int step = 0; step < partitions; step++) {   //遍历每个host
+        for (int step = 0; step < partitions; step++) {   // 遍历每个host
             current_send_part_id = (current_send_part_id + 1) % partitions;
             int i = current_send_part_id;
-            tuned_chunks_dense[i] = new ThreadState[threads];   //为当前分区创建ThreadState
-            EdgeId remained_edges;                      //当前分区中剩余的边数量。
-            int remained_partitions;                    //剩余分配的分区数。
-            VertexId last_p_v_i;                        //记录当前线程开始处理的顶点
-            VertexId end_p_v_i;                         //记录当前线程结束处理的顶点
-            for (int t_i = 0; t_i < threads; t_i++) {   //遍历host的每个线程
-                tuned_chunks_dense[i][t_i].status = WORKING;   //赋值ststus为WORKING
-                int s_i = get_socket_id(t_i);                  //线程在第几个socket
-                int s_j = get_socket_offset(t_i);              //线程是本socket的第几个
+            tuned_chunks_dense[i] = new ThreadState[threads];   // 为当前分区创建ThreadState
+            EdgeId remained_edges;                      // 当前分区中剩余的边数量。
+            int remained_partitions;                    // 剩余分配的分区数。
+            VertexId last_p_v_i;                        // 记录当前线程开始处理的顶点
+            VertexId end_p_v_i;                         // 记录当前线程结束处理的顶点
+            for (int t_i = 0; t_i < threads; t_i++) {   // 遍历host的每个线程
+                tuned_chunks_dense[i][t_i].status = WORKING;   // 赋值ststus为WORKING
+                int s_i = get_socket_id(t_i);                  // 线程在第几个socket
+                int s_j = get_socket_offset(t_i);              // 线程是本socket的第几个
                 if (s_j == 0) {
                     VertexId p_v_i = 0;
                     while (p_v_i < compressed_incoming_adj_vertices[s_i]) {
@@ -2159,26 +2155,26 @@ public:
                         p_v_i++;
                     }
                     end_p_v_i = p_v_i;
-                    //确定当前分区 i 的顶点范围，last_p_v_i 是起点，end_p_v_i
-                    //是终点。这个范围内的顶点由当前分区处理。
+                    // 确定当前分区 i 的顶点范围，last_p_v_i 是起点，end_p_v_i
+                    // 是终点。这个范围内的顶点由当前分区处理。
                     remained_edges = 0;
                     for (VertexId p_v_i = last_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                         remained_edges += compressed_incoming_adj_index[s_i][p_v_i + 1].index -
                                           compressed_incoming_adj_index[s_i][p_v_i].index;
                         remained_edges +=
-                            alpha;   //计算当前分区和线程的剩余边的数量，包括预留的 alpha
-                    }                //计算在该分区内剩余的边数，使用顶点 p_v_i
-                        //的相邻边索引之差得到边的数量，并将其累计到 remained_edges。alpha
-                        //是一个边的附加数量，可能用于任务平衡。
+                            alpha;   // 计算当前分区和线程的剩余边的数量，包括预留的 alpha
+                    }   // 计算在该分区内剩余的边数，使用顶点 p_v_i
+                        // 的相邻边索引之差得到边的数量，并将其累计到 remained_edges。alpha
+                        // 是一个边的附加数量，可能用于任务平衡。
                 }
                 tuned_chunks_dense[i][t_i].curr = last_p_v_i;
-                tuned_chunks_dense[i][t_i].end = last_p_v_i;   //线程处理点的范围
+                tuned_chunks_dense[i][t_i].end = last_p_v_i;   // 线程处理点的范围
                 remained_partitions = threads_per_socket - s_j;
                 EdgeId expected_chunk_size =
-                    remained_edges / remained_partitions;   //表示当前线程预计要处理的边数量
+                    remained_edges / remained_partitions;   // 表示当前线程预计要处理的边数量
 
                 if (remained_partitions ==
-                    1) {   //如果只剩一个分区要分配，直接将当前线程的终止顶点设置为 end_p_v_i
+                    1) {   // 如果只剩一个分区要分配，直接将当前线程的终止顶点设置为 end_p_v_i
                     tuned_chunks_dense[i][t_i].end = end_p_v_i;
                 } else {
                     EdgeId got_edges = 0;
@@ -2186,9 +2182,9 @@ public:
                         got_edges += compressed_incoming_adj_index[s_i][p_v_i + 1].index -
                                      compressed_incoming_adj_index[s_i][p_v_i].index + alpha;
                         if (got_edges >= expected_chunk_size) {
-                            tuned_chunks_dense[i][t_i].end = p_v_i;   //更新每个线程的终止顶点;
+                            tuned_chunks_dense[i][t_i].end = p_v_i;   // 更新每个线程的终止顶点;
                             last_p_v_i =
-                                tuned_chunks_dense[i][t_i].end;   //更新下一个线程的起始顶点;
+                                tuned_chunks_dense[i][t_i].end;   // 更新下一个线程的起始顶点;
                             break;
                         }
                     }
@@ -2213,29 +2209,29 @@ public:
         // }
     }
 
-    //对于acrive中的点执行process任务，启用了工作窃取
-    // process vertices
+    // 对于acrive中的点执行process任务，启用了工作窃取
+    //  process vertices
     template<typename R> R process_vertices(std::function<R(VertexId)> process, Bitmap* active) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
         allreduce_time = 0;
 
         R reducer = 0;
-        size_t basic_chunk = 64;   //每次处理的顶点数，和WORD的位数是对应的
+        size_t basic_chunk = 64;   // 每次处理的顶点数，和WORD的位数是对应的
         for (int t_i = 0; t_i < threads; t_i++) {
             int s_i = get_socket_id(t_i);
             int s_j = get_socket_offset(t_i);
             VertexId partition_size = local_partition_offset[s_i + 1] -
-                                      local_partition_offset[s_i];   //每个分区的点的数量
+                                      local_partition_offset[s_i];   // 每个分区的点的数量
             thread_state[t_i]->curr =
                 local_partition_offset[s_i] +
                 partition_size / threads_per_socket / basic_chunk * basic_chunk *
-                    s_j;   //设置线程的curr，处理点的起始位置，和basic_chunk对齐
+                    s_j;   // 设置线程的curr，处理点的起始位置，和basic_chunk对齐
             thread_state[t_i]->end =
                 local_partition_offset[s_i] + partition_size / threads_per_socket / basic_chunk *
-                                                  basic_chunk * (s_j + 1);   //设置线程的end
+                                                  basic_chunk * (s_j + 1);   // 设置线程的end
             if (s_j == threads_per_socket - 1) {
-                thread_state[t_i]->end = local_partition_offset[s_i + 1];   //设置最后一个线程的end
+                thread_state[t_i]->end = local_partition_offset[s_i + 1];   // 设置最后一个线程的end
             }
             thread_state[t_i]->status = WORKING;
         }
@@ -2246,10 +2242,10 @@ public:
             while (true) {
                 VertexId v_i = __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
                 if (v_i >=
-                    thread_state[thread_id]->end)   //遍历当前线程要处理的点，一次处理basic_chunk
+                    thread_state[thread_id]->end)   // 遍历当前线程要处理的点，一次处理basic_chunk
                     break;
                 unsigned long word =
-                    active->data[WORD_OFFSET(v_i)];   //根据Bitmap *active决定是否执行process
+                    active->data[WORD_OFFSET(v_i)];   // 根据Bitmap *active决定是否执行process
                 while (word != 0) {
                     if (word & 1) {
                         local_reducer += process(v_i);
@@ -2258,12 +2254,12 @@ public:
                     word = word >> 1;
                 }
             }
-            //当前线程的任务处理完后，将状态设置为 STEALING，表示它可能会去“偷取”其他线程的任务
+            // 当前线程的任务处理完后，将状态设置为 STEALING，表示它可能会去“偷取”其他线程的任务
             thread_state[thread_id]->status = STEALING;
             for (int t_offset = 1; t_offset < threads; t_offset++) {
                 int t_i = (thread_id + t_offset) % threads;
                 while (thread_state[t_i]->status !=
-                       STEALING) {   //如果目标线程的状态不是 STEALING，则尝试窃取工作。
+                       STEALING) {   // 如果目标线程的状态不是 STEALING，则尝试窃取工作。
                     VertexId v_i = __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
                     if (v_i >= thread_state[t_i]->end) continue;
                     unsigned long word = active->data[WORD_OFFSET(v_i)];
@@ -2278,7 +2274,7 @@ public:
             }
             reducer += local_reducer;
         }
-        //当本host的任务都完成，开始全局规约
+        // 当本host的任务都完成，开始全局规约
         R global_reducer;
         MPI_Datatype dt = get_mpi_data_type<R>();
         allreduce_time -= MPI_Wtime();
@@ -2295,35 +2291,35 @@ public:
         return global_reducer;
     }
 
-    //将本地线程的发送缓冲区的数据刷新到全局发送缓冲区
-    //全局的send_buffer怎么知道local_send_bufferd的位置呢，不是每个大小都是 local_send_buffer_limit
-    // template<typename M> void flush_local_send_buffer(int t_i) {
-    //     int s_i = get_socket_id(t_i);   //线程在那个socket
-    //     int pos = __sync_fetch_and_add(
-    //         &send_buffer[current_send_part_id][s_i]->count,
-    //         local_send_buffer[t_i]
-    //             ->count);   //通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
-    //     memcpy(send_buffer[current_send_part_id][s_i]->data + sizeof(MsgUnit<M>) * pos,
-    //            local_send_buffer[t_i]->data,
-    //            sizeof(MsgUnit<M>) * local_send_buffer[t_i]->count);
-    //     local_send_buffer[t_i]->count = 0;
-    // }
+    // 将本地线程的发送缓冲区的数据刷新到全局发送缓冲区
+    // 全局的send_buffer怎么知道local_send_bufferd的位置呢，不是每个大小都是 local_send_buffer_limit
+    //  template<typename M> void flush_local_send_buffer(int t_i) {
+    //      int s_i = get_socket_id(t_i);   //线程在那个socket
+    //      int pos = __sync_fetch_and_add(
+    //          &send_buffer[current_send_part_id][s_i]->count,
+    //          local_send_buffer[t_i]
+    //              ->count);   //通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
+    //      memcpy(send_buffer[current_send_part_id][s_i]->data + sizeof(MsgUnit<M>) * pos,
+    //             local_send_buffer[t_i]->data,
+    //             sizeof(MsgUnit<M>) * local_send_buffer[t_i]->count);
+    //      local_send_buffer[t_i]->count = 0;
+    //  }
 
     template<typename M> void flush_local_send_buffer(int t_i) {
-        int s_i = get_socket_id(t_i);   //线程在那个socket
+        int s_i = get_socket_id(t_i);   // 线程在那个socket
         int pos = __sync_fetch_and_add(
             &gim_send_buffer[partition_id][current_send_part_id][s_i]->count,
             local_send_buffer[t_i]
-                ->count);   //通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
+                ->count);   // 通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
         memcpy(gim_send_buffer[partition_id][current_send_part_id][s_i]->data +
                    sizeof(MsgUnit<M>) * pos,
                local_send_buffer[t_i]->data,
                sizeof(MsgUnit<M>) * local_send_buffer[t_i]->count);
         local_send_buffer[t_i]->count = 0;
     }
-    //向特定的顶点发送消息。它首先将消息及其目标顶点 ID 存储到当前线程的本地发送缓冲区中。
-    //如果缓冲区达到限制，则会调用刷新函数将消息发送到全局缓冲区。
-    // emit a message to a vertex's master (dense) / mirror (sparse)
+    // 向特定的顶点发送消息。它首先将消息及其目标顶点 ID 存储到当前线程的本地发送缓冲区中。
+    // 如果缓冲区达到限制，则会调用刷新函数将消息发送到全局缓冲区。
+    //  emit a message to a vertex's master (dense) / mirror (sparse)
     template<typename M> void emit(VertexId vtx, M msg) {
         int t_i = omp_get_thread_num();
         MsgUnit<M>* buffer = (MsgUnit<M>*)local_send_buffer[t_i]->data;
@@ -2349,14 +2345,14 @@ public:
             process_edge_time[i] = 0;
         }
         size_t local_send_buffer_size = 0;
-        for (int t_i = 0; t_i < threads; t_i++) {   //调整local_send_buffer的大小
+        for (int t_i = 0; t_i < threads; t_i++) {   // 调整local_send_buffer的大小
             local_send_buffer[t_i]->resize(sizeof(MsgUnit<M>) * local_send_buffer_limit);
             local_send_buffer_size += sizeof(MsgUnit<M>) * local_send_buffer_limit;
             local_send_buffer[t_i]->count = 0;
         }
 
         R reducer = 0;
-        EdgeId active_edges = process_vertices<EdgeId>(   //计算active中的点的出度之和
+        EdgeId active_edges = process_vertices<EdgeId>(   // 计算active中的点的出度之和
             [&](VertexId vtx) { return (EdgeId)out_degree[vtx]; },
             active);
         bool sparse = (active_edges < edges / 20);
@@ -2364,24 +2360,24 @@ public:
         size_t send_buffer_size = 0;
         size_t recv_buffer_size = 0;
         if (sparse) {
-            for (int i = 0; i < partitions; i++) {   //稀疏模式每个host要向外发送数据
+            for (int i = 0; i < partitions; i++) {   // 稀疏模式每个host要向外发送数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
 
                     recv_buffer[i][s_i]->resize(
                         sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
                     send_buffer[partition_id][s_i]->resize(
                         sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     send_buffer[partition_id][s_i]->count = 0;
                     recv_buffer[i][s_i]->count = 0;
 
                     gim_recv_buffer[partition_id][i][s_i]->resize(
                         sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
                     gim_send_buffer[partition_id][partition_id][s_i]->resize(
                         sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
 
@@ -2391,12 +2387,12 @@ public:
                 }
             }
         } else {
-            for (int i = 0; i < partitions; i++) {   //稠密模式每个host要接受数据
+            for (int i = 0; i < partitions; i++) {   // 稠密模式每个host要接受数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
 
 
                     recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
-                                                sockets);   //跟上面相反
+                                                sockets);   // 跟上面相反
                     send_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) *
                                                 (partition_offset[i + 1] - partition_offset[i]) *
                                                 sockets);
@@ -2405,10 +2401,10 @@ public:
 
                     gim_recv_buffer[partition_id][i][s_i]->resize(
                         sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   //接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
                     gim_send_buffer[partition_id][partition_id][s_i]->resize(
                         sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   //发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
                     gim_send_buffer[partition_id][i][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
                     recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
@@ -2436,7 +2432,7 @@ public:
             std::mutex recv_queue_mutex;
 
             current_send_part_id = partition_id;
-            //对自己host的点进行遍历，以basic_chunk为单位
+            // 对自己host的点进行遍历，以basic_chunk为单位
 #pragma omp parallel for
             for (VertexId begin_v_i = partition_offset[partition_id];
                  begin_v_i < partition_offset[partition_id + 1];
@@ -2445,7 +2441,7 @@ public:
                 unsigned long word = active->data[WORD_OFFSET(v_i)];
                 while (word != 0) {
                     if (word & 1) {
-                        sparse_signal(v_i);   //每个点都执行sparse_signal
+                        sparse_signal(v_i);   // 每个点都执行sparse_signal
                     }
                     v_i++;
                     word = word >> 1;
@@ -2458,15 +2454,15 @@ public:
             process_edge_time[0] = MPI_Wtime() + stream_time;
 
             recv_queue[recv_queue_size] = partition_id;
-            recv_queue_mutex.lock();   //为啥这里用锁了不用原子变量
+            recv_queue_mutex.lock();   // 为啥这里用锁了不用原子变量
             recv_queue_size += 1;
             recv_queue_mutex.unlock();
 
             std::thread send_thread([&]() {
-                for (int step = 1; step < partitions; step++) {   //遍历host
+                for (int step = 1; step < partitions; step++) {   // 遍历host
                     int i = (partition_id - step + partitions) %
-                            partitions;   //确保i进程是除了自己以外的所有进程
-                    for (int s_i = 0; s_i < sockets; s_i++) {   //遍历所有socket
+                            partitions;   // 确保i进程是除了自己以外的所有进程
+                    for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历所有socket
                         // MPI_Send(send_buffer[partition_id][s_i]->data,
                         //          sizeof(MsgUnit<M>) * send_buffer[partition_id][s_i]->count,
                         //          MPI_CHAR,
@@ -2492,9 +2488,9 @@ public:
                 }
             });
             std::thread recv_thread([&]() {
-                for (int step = 1; step < partitions; step++) {   //遍历host
-                    int i = (partition_id + step) % partitions;   //除了自己以外的所有进程
-                    for (int s_i = 0; s_i < sockets; s_i++) {     //遍历所有socket
+                for (int step = 1; step < partitions; step++) {   // 遍历host
+                    int i = (partition_id + step) % partitions;   // 除了自己以外的所有进程
+                    for (int s_i = 0; s_i < sockets; s_i++) {     // 遍历所有socket
                         MPI_Status recv_status;
                         MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
                         // MPI_Get_count(&recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
@@ -2531,11 +2527,12 @@ public:
                     recv_queue_mutex.unlock();
                 }
             });
-            //现在数据都到每个host的recv_buffer里了
-            for (int step = 0; step < partitions; step++) {   //遍历所有分区，这里是串行的
+            // 现在数据都到每个host的recv_buffer里了
+            for (int step = 0; step < partitions; step++) {   // 遍历所有分区，这里是串行的
                 while (true) {
                     recv_queue_mutex.lock();
-                    bool condition = (recv_queue_size <= step);   //当前分区接受完成才继续后面的计算
+                    bool condition =
+                        (recv_queue_size <= step);   // 当前分区接受完成才继续后面的计算
                     recv_queue_mutex.unlock();
                     if (!condition) break;
                     __asm volatile("pause" ::: "memory");
@@ -2550,16 +2547,16 @@ public:
                     // used_buffer = recv_buffer[i];
                     used_buffer = gim_recv_buffer[partition_id][i];
                 }
-                for (int s_i = 0; s_i < sockets; s_i++) {   //遍历所有socket
+                for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历所有socket
                     MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]
-                                             ->data;   //将(MessageBuffer*)->data转为(MsgUnit<M>
-                                                       // s_i表示第s_i个socket的buffer
+                                             ->data;   // 将(MessageBuffer*)->data转为(MsgUnit<M>
+                                                       //  s_i表示第s_i个socket的buffer
                     size_t buffer_size =
                         used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
                                                    // s_i个socket的buffersize
-                    for (int t_i = 0; t_i < threads; t_i++) {   //遍历所有线程
-                        //确定每个线程负责buffer的哪个部分
-                        // int s_i = get_socket_id(t_i);
+                    for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
+                        // 确定每个线程负责buffer的哪个部分
+                        //  int s_i = get_socket_id(t_i);
                         int s_j = get_socket_offset(t_i);
                         VertexId partition_size = buffer_size;
                         thread_state[t_i]->curr =
@@ -2576,9 +2573,9 @@ public:
                         R local_reducer = 0;
                         int thread_id = omp_get_thread_num();
                         int s_i = get_socket_id(thread_id);
-                        //执行sparse_slot
+                        // 执行sparse_slot
                         while (true) {
-                            //线程开始从自己负责的部分开始获取任务
+                            // 线程开始从自己负责的部分开始获取任务
                             VertexId b_i =
                                 __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
                             if (b_i >= thread_state[thread_id]->end) break;
@@ -2587,17 +2584,17 @@ public:
                             if (end_b_i > thread_state[thread_id]->end) {
                                 end_b_i = thread_state[thread_id]->end;
                             }
-                            //获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
+                            // 获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
                             for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                                 VertexId v_i = buffer[b_i].vertex;
                                 M msg_data = buffer[b_i].msg_data;
                                 if (outgoing_adj_bitmap[s_i]->get_bit(
-                                        v_i)) {   //如果v_i在s_i socket内有出边
+                                        v_i)) {   // 如果v_i在s_i socket内有出边
                                     local_reducer += sparse_slot(
                                         v_i,
                                         msg_data,
-                                        VertexAdjList<EdgeData>(   //遍历v_i在s_i
-                                                                   // socket内的出边的dst
+                                        VertexAdjList<EdgeData>(   // 遍历v_i在s_i
+                                                                   //  socket内的出边的dst
                                             outgoing_adj_list[s_i] +
                                                 outgoing_adj_index[s_i]
                                                                   [v_i],   // s_i内v_i的出边开始
@@ -2608,7 +2605,7 @@ public:
                                 }
                             }
                         }
-                        //工作窃取
+                        // 工作窃取
                         thread_state[thread_id]->status = STEALING;
                         for (int t_offset = 1; t_offset < threads; t_offset++) {
                             int t_i = (thread_id + t_offset) % threads;
@@ -2631,7 +2628,7 @@ public:
                                             v_i,
                                             msg_data,
                                             VertexAdjList<
-                                                EdgeData>(   //这里只是两个指针，具体数据是存放邻居的数组
+                                                EdgeData>(   // 这里只是两个指针，具体数据是存放邻居的数组
                                                 outgoing_adj_list[s_i] +
                                                     outgoing_adj_index[s_i][v_i],
                                                 outgoing_adj_list[s_i] +
@@ -2651,7 +2648,7 @@ public:
         } else {
 
             // dense selective bitmap
-            if (dense_selective != nullptr && partitions > 1) {   //根本没被用到
+            if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
                 double sync_time = 0;
                 sync_time -= get_time();
                 std::thread send_thread([&]() {
@@ -2716,7 +2713,7 @@ public:
                         send_queue_mutex.lock();
                         bool condition =
                             (send_queue_size <=
-                             step);   //当前分区发送出去才继续后面的，每一次发送完成才发送下一次
+                             step);   // 当前分区发送出去才继续后面的，每一次发送完成才发送下一次
                         send_queue_mutex.unlock();
                         if (!condition) break;
                         __asm volatile("pause" ::: "memory");
@@ -2748,7 +2745,7 @@ public:
                 std::vector<std::thread> threads;
                 for (int step = 1; step < partitions; step++) {
                     int i = (partition_id - step + partitions) %
-                            partitions;   //确保i进程是除了自己以外的所有进程
+                            partitions;   // 确保i进程是除了自己以外的所有进程
                     threads
                         .emplace_back(   // partitions-1个线程，每个线程的任务是接受数据，共接受partitions-1
                             [&](int i) {   // i是分区
@@ -2812,14 +2809,14 @@ public:
                 for (int t_i = 0; t_i < threads; t_i++) {
                     *thread_state[t_i] = tuned_chunks_dense[i][t_i];
                 }
-                //每个点对邻居执行dense_signal
+                // 每个点对邻居执行dense_signal
 #pragma omp parallel
                 {
                     int thread_id = omp_get_thread_num();
                     int s_i = get_socket_id(thread_id);
                     VertexId final_p_v_i = thread_state[thread_id]->end;
                     while (true) {
-                        //线程开始从自己负责的部分开始获取任务
+                        // 线程开始从自己负责的部分开始获取任务
                         VertexId begin_p_v_i =
                             __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
                         if (begin_p_v_i >= final_p_v_i) break;
@@ -2830,7 +2827,7 @@ public:
                         for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                             VertexId v_i =
                                 compressed_incoming_adj_index[s_i][p_v_i]
-                                    .vertex;   //对于s_i socket中的v_i，对所有邻居执行dense_signal
+                                    .vertex;   // 对于s_i socket中的v_i，对所有邻居执行dense_signal
                             dense_signal(
                                 v_i,
                                 VertexAdjList<EdgeData>(
@@ -2840,7 +2837,7 @@ public:
                                         compressed_incoming_adj_index[s_i][p_v_i + 1].index));
                         }
                     }
-                    //线程窃取
+                    // 线程窃取
                     thread_state[thread_id]->status = STEALING;
                     for (int t_offset = 1; t_offset < threads; t_offset++) {
                         int t_i = (thread_id + t_offset) % threads;
@@ -2873,7 +2870,7 @@ public:
                 for (int t_i = 0; t_i < threads; t_i++) {
                     flush_local_send_buffer<M>(t_i);
                 }
-                //这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
+                // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
                 if (i != partition_id) {
                     send_queue[send_queue_size] = i;
                     send_queue_mutex.lock();
@@ -2890,7 +2887,7 @@ public:
                     recv_queue_mutex.unlock();
                     if (!condition) break;
                     __asm volatile("pause" ::: "memory");
-                }   //接受完一个就启动计算
+                }   // 接受完一个就启动计算
                 int i = recv_queue[step];
                 // MessageBuffer** used_buffer;
                 GIMMessageBuffer** used_buffer;
@@ -2901,7 +2898,7 @@ public:
                     // used_buffer = recv_buffer[i];
                     used_buffer = gim_recv_buffer[partition_id][i];
                 }
-                //确定每个线程负责buffer的哪个部分
+                // 确定每个线程负责buffer的哪个部分
                 for (int t_i = 0; t_i < threads; t_i++) {
                     int s_i = get_socket_id(t_i);
                     int s_j = get_socket_offset(t_i);
@@ -2922,7 +2919,7 @@ public:
                     int s_i = get_socket_id(thread_id);
                     MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]->data;
                     while (true) {
-                        //线程开始从自己负责的部分开始获取任务
+                        // 线程开始从自己负责的部分开始获取任务
                         VertexId b_i =
                             __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
                         if (b_i >= thread_state[thread_id]->end) break;
@@ -2934,7 +2931,7 @@ public:
                         for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                             VertexId v_i = buffer[b_i].vertex;
                             M msg_data = buffer[b_i].msg_data;
-                            local_reducer += dense_slot(v_i, msg_data);   //对每个vi执行dense_slot
+                            local_reducer += dense_slot(v_i, msg_data);   // 对每个vi执行dense_slot
                         }
                     }
                     thread_state[thread_id]->status = STEALING;
