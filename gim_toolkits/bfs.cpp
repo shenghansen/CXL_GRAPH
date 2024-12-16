@@ -45,7 +45,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
         active_out->clear();
         active_vertices = graph->process_edges<VertexId, VertexId>(
             [&](VertexId src) { graph->emit(src, src); },
-            [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj) {
+            [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 VertexId activated = 0;
                 for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                     VertexId dst = ptr->neighbour;
@@ -56,7 +56,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
                 }
                 return activated;
             },
-            [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
+            [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 if (visited->get_bit(dst)) return;
                 for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                     VertexId src = ptr->neighbour;
@@ -128,7 +128,6 @@ int main(int argc, char ** argv) {
   printf("partiton_id: %d, total_process_time  =%lf(s)\n",
          graph->get_partition_id(),
          graph->print_total_process_time());
-  // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
   // for (int run=0;run<5;run++) {
   //   compute(graph, root);
   // }

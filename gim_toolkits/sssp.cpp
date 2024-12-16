@@ -39,47 +39,44 @@ void compute(Graph<Weight> * graph, VertexId root) {
       printf("active(%d)>=%u\n", i_i, active_vertices);
     }
     active_out->clear();
-    active_vertices = graph->process_edges<VertexId,Weight>(
-      [&](VertexId src){
-        graph->emit(src, distance[src]);
-      },
-      [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj){
-        VertexId activated = 0;
-        for (AdjUnit<Weight> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          Weight relax_dist = msg + ptr->edge_data;
-          if (relax_dist < distance[dst]) {
-            if (write_min(&distance[dst], relax_dist)) {
-              active_out->set_bit(dst);
-              activated += 1;
+    active_vertices = graph->process_edges<VertexId, Weight>(
+        [&](VertexId src) { graph->emit(src, distance[src]); },
+        [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj, int partition_id) {
+            VertexId activated = 0;
+            for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                VertexId dst = ptr->neighbour;
+                Weight relax_dist = msg + ptr->edge_data;
+                if (relax_dist < distance[dst]) {
+                    if (write_min(&distance[dst], relax_dist)) {
+                        active_out->set_bit(dst);
+                        activated += 1;
+                    }
+                }
             }
-          }
-        }
-        return activated;
-      },
-      [&](VertexId dst, VertexAdjList<Weight> incoming_adj) {
-        Weight msg = 1e9;
-        for (AdjUnit<Weight> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          // if (active_in->get_bit(src)) {
-            Weight relax_dist = distance[src] + ptr->edge_data;
-            if (relax_dist < msg) {
-              msg = relax_dist;
+            return activated;
+        },
+        [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
+            Weight msg = 1e9;
+            for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                VertexId src = ptr->neighbour;
+                // if (active_in->get_bit(src)) {
+                Weight relax_dist = distance[src] + ptr->edge_data;
+                if (relax_dist < msg) {
+                    msg = relax_dist;
+                }
+                // }
             }
-          // }
-        }
-        if (msg < 1e9) graph->emit(dst, msg);
-      },
-      [&](VertexId dst, Weight msg) {
-        if (msg < distance[dst]) {
-          write_min(&distance[dst], msg);
-          active_out->set_bit(dst);
-          return 1;
-        }
-        return 0;
-      },
-      active_in
-    );
+            if (msg < 1e9) graph->emit(dst, msg);
+        },
+        [&](VertexId dst, Weight msg) {
+            if (msg < distance[dst]) {
+                write_min(&distance[dst], msg);
+                active_out->set_bit(dst);
+                return 1;
+            }
+            return 0;
+        },
+        active_in);
     std::swap(active_in, active_out);
   }
 
@@ -122,8 +119,7 @@ int main(int argc, char ** argv) {
   // for (int run=0;run<5;run++) {
   //   compute(graph, root);
   // }
-  // printf("total allreduce time =%lf(s)\n", graph->print_total_allreduce());
-  // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
+
   delete graph;
   return 0;
 }

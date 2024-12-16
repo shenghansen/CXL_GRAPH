@@ -42,44 +42,41 @@ void compute(Graph<Empty> * graph) {
       printf("active(%d)>=%u\n", i_i, active_vertices);
     }
     active_out->clear();
-    active_vertices = graph->process_edges<VertexId,VertexId>(
-      [&](VertexId src){
-        graph->emit(src, label[src]);
-      },
-      [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj){
-        VertexId activated = 0;
-        for (AdjUnit<Empty> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          if (msg < label[dst]) {
-            write_min(&label[dst], msg);
-            active_out->set_bit(dst);
-            activated += 1;
-          }
-        }
-        return activated;
-      },
-      [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
-        VertexId msg = dst;
-        for (AdjUnit<Empty> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          if (label[src] < msg) {
-            msg = label[src];
-          }
-        }
-        if (msg < dst) {
-          graph->emit(dst, msg);
-        }
-      },
-      [&](VertexId dst, VertexId msg) {
-        if (msg < label[dst]) {
-          write_min(&label[dst], msg);
-          active_out->set_bit(dst);
-          return 1u;
-        }
-        return 0u;
-      },
-      active_in
-    );
+    active_vertices = graph->process_edges<VertexId, VertexId>(
+        [&](VertexId src) { graph->emit(src, label[src]); },
+        [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+            VertexId activated = 0;
+            for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                VertexId dst = ptr->neighbour;
+                if (msg < label[dst]) {
+                    write_min(&label[dst], msg);
+                    active_out->set_bit(dst);
+                    activated += 1;
+                }
+            }
+            return activated;
+        },
+        [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+            VertexId msg = dst;
+            for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                VertexId src = ptr->neighbour;
+                if (label[src] < msg) {
+                    msg = label[src];
+                }
+            }
+            if (msg < dst) {
+                graph->emit(dst, msg);
+            }
+        },
+        [&](VertexId dst, VertexId msg) {
+            if (msg < label[dst]) {
+                write_min(&label[dst], msg);
+                active_out->set_bit(dst);
+                return 1u;
+            }
+            return 0u;
+        },
+        active_in);
     std::swap(active_in, active_out);
   }
 
@@ -126,8 +123,6 @@ int main(int argc, char ** argv) {
   //   compute(graph);
   // }
   // printf("partiton_id: %d, total_process_time  =%lf(s)\n",graph->get_partition_id(), graph->print_total_process_time());
-  // printf("total allreduce time =%lf(s)\n", graph->print_total_allreduce());
-  // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
   delete graph;
   return 0;
 }

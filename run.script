@@ -1,6 +1,5 @@
 #!/bin/bash
-cxl_commands=("./cxl_toolkits/pagerank" "./cxl_toolkits/bfs" "./cxl_toolkits/cc" "./cxl_toolkits/sssp" "./cxl_toolkits/bc")
-commands=("./toolkits/pagerank" "./toolkits/bfs" "./toolkits/cc" "./toolkits/sssp" "./toolkits/bc")
+commands=("./build/pagerank" "./build/bfs" "./build/cc" "./build/sssp" "./build/bc")
 args=( "../data/twitter-2010Bin 41652230 1" "../data/enwiki-2013in 4206785 1" "../data/uk-2007Bin 105896555 1"  "../data/rMat24Bin 16800000 10" "../data/rMat27Bin 134000000 1")
 
 

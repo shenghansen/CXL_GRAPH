@@ -51,44 +51,42 @@ void compute(Graph<Empty> * graph, VertexId root) {
     }
     VertexSubset * active_out = graph->alloc_vertex_subset();
     active_out->clear();
-    graph->process_edges<VertexId,double>(
-      [&](VertexId src){
-        graph->emit(src, num_paths[src]);
-      },
-      [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj){
-        for (AdjUnit<Empty> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          if (!visited->get_bit(dst)) {
-            if (num_paths[dst]==0) {
-              active_out->set_bit(dst);
+    graph->process_edges<VertexId, double>(
+        [&](VertexId src) { graph->emit(src, num_paths[src]); },
+        [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+            for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                VertexId dst = ptr->neighbour;
+                if (!visited->get_bit(dst)) {
+                    if (num_paths[dst] == 0) {
+                        active_out->set_bit(dst);
+                    }
+                    write_add(&num_paths[dst], msg);
+                }
             }
-            write_add(&num_paths[dst], msg);
-          }
-        }
-        return 0;
-      },
-      [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
-        if (visited->get_bit(dst)) return;
-        double sum = 0;
-        for (AdjUnit<Empty> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          if (active_in->get_bit(src)) {
-            sum += num_paths[src];
-          }
-        }
-        if (sum > 0) {
-          graph->emit(dst, sum);
-        }
-      },
-      [&](VertexId dst, double msg) {
-        if (!visited->get_bit(dst)) {
-          active_out->set_bit(dst);
-          write_add(&num_paths[dst], msg);
-        }
-        return 0;
-      },
-      active_in, visited
-    );
+            return 0;
+        },
+        [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+            if (visited->get_bit(dst)) return;
+            double sum = 0;
+            for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                VertexId src = ptr->neighbour;
+                if (active_in->get_bit(src)) {
+                    sum += num_paths[src];
+                }
+            }
+            if (sum > 0) {
+                graph->emit(dst, sum);
+            }
+        },
+        [&](VertexId dst, double msg) {
+            if (!visited->get_bit(dst)) {
+                active_out->set_bit(dst);
+                write_add(&num_paths[dst], msg);
+            }
+            return 0;
+        },
+        active_in,
+        visited);
     active_vertices = graph->process_vertices<VertexId>(//用来标记点访问过了
       [&](VertexId vtx) {
         visited->set_bit(vtx);
@@ -123,48 +121,45 @@ void compute(Graph<Empty> * graph, VertexId root) {
     // printf("backward\n");
   }
   while (levels.size() > 1) {
-    graph->process_edges<VertexId,double>(
-      [&](VertexId src){
-        graph->emit(src, dependencies[src]);
-      },
-      [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj){
-        for (AdjUnit<Empty> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          if (!visited->get_bit(dst)) {
-            write_add(&dependencies[dst], msg);
-          }
-        }
-        return 0;
-      },
-      [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
-        if (visited->get_bit(dst)) return;
-        double sum = 0;
-        for (AdjUnit<Empty> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          if (levels.back()->get_bit(src)) {
-            sum += dependencies[src];
-          }
-        }
-        graph->emit(dst, sum);
-      },
-      [&](VertexId dst, double msg) {
-        if (!visited->get_bit(dst)) {
-          write_add(&dependencies[dst], msg);
-        }
-        return 0;
-      },
-      levels.back(), visited
-    );
-    delete levels.back();
-    levels.pop_back();
-    graph->process_vertices<VertexId>(
-      [&](VertexId vtx){
-        visited->set_bit(vtx);
-        dependencies[vtx] += inv_num_paths[vtx];
-        return 1;
-      },
-      levels.back()
-    );
+      graph->process_edges<VertexId, double>(
+          [&](VertexId src) { graph->emit(src, dependencies[src]); },
+          [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+              for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                  VertexId dst = ptr->neighbour;
+                  if (!visited->get_bit(dst)) {
+                      write_add(&dependencies[dst], msg);
+                  }
+              }
+              return 0;
+          },
+          [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+              if (visited->get_bit(dst)) return;
+              double sum = 0;
+              for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                  VertexId src = ptr->neighbour;
+                  if (levels.back()->get_bit(src)) {
+                      sum += dependencies[src];
+                  }
+              }
+              graph->emit(dst, sum);
+          },
+          [&](VertexId dst, double msg) {
+              if (!visited->get_bit(dst)) {
+                  write_add(&dependencies[dst], msg);
+              }
+              return 0;
+          },
+          levels.back(),
+          visited);
+      delete levels.back();
+      levels.pop_back();
+      graph->process_vertices<VertexId>(
+          [&](VertexId vtx) {
+              visited->set_bit(vtx);
+              dependencies[vtx] += inv_num_paths[vtx];
+              return 1;
+          },
+          levels.back());
   }
 
   graph->process_vertices<VertexId>(
@@ -236,44 +231,42 @@ void compute_compact(Graph<Empty> * graph, VertexId root) {
     //   printf("active(%d)>=%u\n", i_i, active_vertices);
     // }
     active_out->clear();
-    graph->process_edges<VertexId,double>(
-      [&](VertexId src){
-        graph->emit(src, num_paths[src]);
-      },
-      [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj){
-        for (AdjUnit<Empty> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          if (!visited->get_bit(dst)) {
-            if (num_paths[dst]==0) {
-              active_out->set_bit(dst);
+    graph->process_edges<VertexId, double>(
+        [&](VertexId src) { graph->emit(src, num_paths[src]); },
+        [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+            for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                VertexId dst = ptr->neighbour;
+                if (!visited->get_bit(dst)) {
+                    if (num_paths[dst] == 0) {
+                        active_out->set_bit(dst);
+                    }
+                    write_add(&num_paths[dst], msg);
+                }
             }
-            write_add(&num_paths[dst], msg);
-          }
-        }
-        return 0;
-      },
-      [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
-        if (visited->get_bit(dst)) return;
-        double sum = 0;
-        for (AdjUnit<Empty> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          if (active_in->get_bit(src)) {
-            sum += num_paths[src];
-          }
-        }
-        if (sum > 0) {
-          graph->emit(dst, sum);
-        }
-      },
-      [&](VertexId dst, double msg) {
-        if (!visited->get_bit(dst)) {
-          active_out->set_bit(dst);
-          write_add(&num_paths[dst], msg);
-        }
-        return 0;
-      },
-      active_in, visited
-    );
+            return 0;
+        },
+        [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+            if (visited->get_bit(dst)) return;
+            double sum = 0;
+            for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                VertexId src = ptr->neighbour;
+                if (active_in->get_bit(src)) {
+                    sum += num_paths[src];
+                }
+            }
+            if (sum > 0) {
+                graph->emit(dst, sum);
+            }
+        },
+        [&](VertexId dst, double msg) {
+            if (!visited->get_bit(dst)) {
+                active_out->set_bit(dst);
+                write_add(&num_paths[dst], msg);
+            }
+            return 0;
+        },
+        active_in,
+        visited);
     active_vertices = graph->process_vertices<VertexId>(
       [&](VertexId vtx) {
         visited->set_bit(vtx);
@@ -319,58 +312,54 @@ void compute_compact(Graph<Empty> * graph, VertexId root) {
     // printf("backward\n");
   }
   while (i_i > 0) {
-    graph->process_edges<VertexId,double>(
-      [&](VertexId src){
-        graph->emit(src, dependencies[src]);
-      },
-      [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj){
-        for (AdjUnit<Empty> * ptr=outgoing_adj.begin;ptr!=outgoing_adj.end;ptr++) {
-          VertexId dst = ptr->neighbour;
-          if (!visited->get_bit(dst)) {
-            write_add(&dependencies[dst], msg);
-          }
-        }
-        return 0;
-      },
-      [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
-        if (visited->get_bit(dst)) return;
-        double sum = 0;
-        for (AdjUnit<Empty> * ptr=incoming_adj.begin;ptr!=incoming_adj.end;ptr++) {
-          VertexId src = ptr->neighbour;
-          if (active_in->get_bit(src)) {
-            sum += dependencies[src];
-          }
-        }
-        graph->emit(dst, sum);
-      },
-      [&](VertexId dst, double msg) {
-        if (!visited->get_bit(dst)) {
-          write_add(&dependencies[dst], msg);
-        }
-        return 0;
-      },
-      active_in, visited
-    );
-    i_i--;
-    active_in->clear();
-    active_vertices = graph->process_vertices<VertexId>(
-      [&](VertexId vtx){
-        if (level[vtx]==i_i) {
-          active_in->set_bit(vtx);
-          return 1;
-        }
-        return 0;
-      },
-      active_all
-    );
-    graph->process_vertices<VertexId>(
-      [&](VertexId vtx){
-        visited->set_bit(vtx);
-        dependencies[vtx] += inv_num_paths[vtx];
-        return 1;
-      },
-      active_in
-    );
+      graph->process_edges<VertexId, double>(
+          [&](VertexId src) { graph->emit(src, dependencies[src]); },
+          [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+              for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                  VertexId dst = ptr->neighbour;
+                  if (!visited->get_bit(dst)) {
+                      write_add(&dependencies[dst], msg);
+                  }
+              }
+              return 0;
+          },
+          [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+              if (visited->get_bit(dst)) return;
+              double sum = 0;
+              for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                  VertexId src = ptr->neighbour;
+                  if (active_in->get_bit(src)) {
+                      sum += dependencies[src];
+                  }
+              }
+              graph->emit(dst, sum);
+          },
+          [&](VertexId dst, double msg) {
+              if (!visited->get_bit(dst)) {
+                  write_add(&dependencies[dst], msg);
+              }
+              return 0;
+          },
+          active_in,
+          visited);
+      i_i--;
+      active_in->clear();
+      active_vertices = graph->process_vertices<VertexId>(
+          [&](VertexId vtx) {
+              if (level[vtx] == i_i) {
+                  active_in->set_bit(vtx);
+                  return 1;
+              }
+              return 0;
+          },
+          active_all);
+      graph->process_vertices<VertexId>(
+          [&](VertexId vtx) {
+              visited->set_bit(vtx);
+              dependencies[vtx] += inv_num_paths[vtx];
+              return 1;
+          },
+          active_in);
   }
 
   graph->process_vertices<VertexId>(
@@ -429,8 +418,6 @@ int main(int argc, char ** argv) {
   //   #endif
   // }
   printf("partiton_id: %d, total_process_time  =%lf(s)\n",graph->get_partition_id(), graph->print_total_process_time());
-  // printf("total allreduce time =%lf(s)\n", graph->print_total_allreduce());
-  // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
   delete graph;
   return 0;
 }

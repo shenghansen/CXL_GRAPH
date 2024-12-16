@@ -56,10 +56,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 #define CAPACITY (1ull * 1024 * 1024 * 1024)
 
-/* shenghansen:for test */
-double allreduce_time = 0;
 // #define  PRINT_DEBUG_MESSAGES 1
-double total_allreduce_time = 0;
 double total_process_time = 0;
 bool is_first = true;
 double process_edge_time[4] = {0};
@@ -489,8 +486,6 @@ public:
             }
         }
     }
-    double print_total_allreduce() { return total_allreduce_time; }
-
 
     double print_total_process_time() { return total_process_time; }
     // fill a vertex array with a specific value
@@ -636,7 +631,6 @@ public:
 
     // load a directed graph and make it undirected
     //     void load_undirected_from_directed(std::string path, VertexId vertices) {
-    //         allreduce_time = 0;
     //         double prep_time = 0;
     //         prep_time -= MPI_Wtime();
 
@@ -687,9 +681,7 @@ public:
     //                 __sync_fetch_and_add(&out_degree[dst], 1);
     //             }
     //         }
-    //         allreduce_time -= MPI_Wtime();
     //         MPI_Allreduce(MPI_IN_PLACE, out_degree, vertices, vid_t, MPI_SUM, MPI_COMM_WORLD);
-    //         allreduce_time += MPI_Wtime();
 
     //         // locality-aware chunking
     //         partition_offset = new VertexId[partitions + 1];
@@ -720,25 +712,21 @@ public:
     //         owned_vertices = partition_offset[partition_id + 1] - partition_offset[partition_id];
     //         // check consistency of partition boundaries
     //         VertexId* global_partition_offset = new VertexId[partitions + 1];
-    //         allreduce_time -= MPI_Wtime();
     //         MPI_Allreduce(partition_offset,
     //                       global_partition_offset,
     //                       partitions + 1,
     //                       vid_t,
     //                       MPI_MAX,
     //                       MPI_COMM_WORLD);
-    //         allreduce_time += MPI_Wtime();
     //         for (int i = 0; i <= partitions; i++) {
     //             assert(partition_offset[i] == global_partition_offset[i]);
     //         }
-    //         allreduce_time -= MPI_Wtime();
     //         MPI_Allreduce(partition_offset,
     //                       global_partition_offset,
     //                       partitions + 1,
     //                       vid_t,
     //                       MPI_MIN,
     //                       MPI_COMM_WORLD);
-    //         allreduce_time += MPI_Wtime();
     //         for (int i = 0; i <= partitions; i++) {
     //             assert(partition_offset[i] == global_partition_offset[i]);
     //         }
@@ -1183,7 +1171,6 @@ public:
     void load_directed(std::string path, VertexId vertices) {
         double prep_time = 0;
         prep_time -= MPI_Wtime();
-        allreduce_time = 0;
         symmetric = false;
 
         MPI_Datatype vid_t = get_mpi_data_type<VertexId>();
@@ -1234,14 +1221,12 @@ public:
                 __sync_fetch_and_add(&out_degree[src], 1);   // 每个节点都更新每个点的出度
             }
         }
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(MPI_IN_PLACE,
                       out_degree,
                       vertices,
                       vid_t,
                       MPI_SUM,
                       MPI_COMM_WORLD);   // 更新全局的点的出度
-        allreduce_time += MPI_Wtime();   // 读完全部的边
 
         // 进行分区，确定每个节点上面的master边
         //  locality-aware chunking
@@ -1276,25 +1261,21 @@ public:
         // 如果有节点计算结果不同，利用allreduce来保证每个节点上partition_offset是相同的
         //  check consistency of partition boundaries
         VertexId* global_partition_offset = new VertexId[partitions + 1];
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(partition_offset,
                       global_partition_offset,
                       partitions + 1,
                       vid_t,
                       MPI_MAX,
                       MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
         for (int i = 0; i <= partitions; i++) {
             assert(partition_offset[i] == global_partition_offset[i]);
         }
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(partition_offset,
                       global_partition_offset,
                       partitions + 1,
                       vid_t,
                       MPI_MIN,
                       MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
         for (int i = 0; i <= partitions; i++) {
             assert(partition_offset[i] == global_partition_offset[i]);
         }
@@ -2116,7 +2097,6 @@ public:
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("preprocessing cost: %.2lf (s)\n", prep_time);
-            printf("load allreduce took %lf (s)\n", allreduce_time);
         }
 #endif
     }
@@ -2214,7 +2194,6 @@ public:
     template<typename R> R process_vertices(std::function<R(VertexId)> process, Bitmap* active) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
-        allreduce_time = 0;
 
         R reducer = 0;
         size_t basic_chunk = 64;   // 每次处理的顶点数，和WORD的位数是对应的
@@ -2277,15 +2256,11 @@ public:
         // 当本host的任务都完成，开始全局规约
         R global_reducer;
         MPI_Datatype dt = get_mpi_data_type<R>();
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
         stream_time += MPI_Wtime();
-        total_allreduce_time += allreduce_time;
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("process_vertices took %lf (s)\n", stream_time);
-            printf("allreduce took %lf (s)\n", allreduce_time);
         }
 #endif
         return global_reducer;
@@ -2333,14 +2308,15 @@ public:
 
     // process edges
     template<typename R, typename M>
-    R process_edges(std::function<void(VertexId)> sparse_signal,
-                    std::function<R(VertexId, M, VertexAdjList<EdgeData>)> sparse_slot,
-                    std::function<void(VertexId, VertexAdjList<EdgeData>)> dense_signal,
-                    std::function<R(VertexId, M)> dense_slot, Bitmap* active,
-                    Bitmap* dense_selective = nullptr) {
+    R process_edges(
+        std::function<void(VertexId)> sparse_signal,
+        std::function<R(VertexId, M, VertexAdjList<EdgeData>, int partiton_id)> sparse_slot,
+        std::function<void(VertexId, VertexAdjList<EdgeData>, int partiton_id)>
+            dense_signal,
+        std::function<R(VertexId, M)> dense_slot, Bitmap* active,
+        Bitmap* dense_selective = nullptr) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
-        allreduce_time = 0;
         for (int i = 0; i < 4; i++) {
             process_edge_time[i] = 0;
         }
@@ -2601,7 +2577,7 @@ public:
                                             outgoing_adj_list[s_i] +
                                                 outgoing_adj_index[s_i]
                                                                   [v_i +
-                                                                   1]));   // s_i内v_i的出边结束
+                                                                   1]),-1);   // s_i内v_i的出边结束
                                 }
                             }
                         }
@@ -2632,7 +2608,7 @@ public:
                                                 outgoing_adj_list[s_i] +
                                                     outgoing_adj_index[s_i][v_i],
                                                 outgoing_adj_list[s_i] +
-                                                    outgoing_adj_index[s_i][v_i + 1]));
+                                                    outgoing_adj_index[s_i][v_i + 1]),-1);
                                     }
                                 }
                             }
@@ -2645,8 +2621,8 @@ public:
             recv_thread.join();
             process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
             delete[] recv_queue;
-        } else {
-
+        } 
+        else {
             // dense selective bitmap
             if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
                 double sync_time = 0;
@@ -2834,7 +2810,8 @@ public:
                                     incoming_adj_list[s_i] +
                                         compressed_incoming_adj_index[s_i][p_v_i].index,
                                     incoming_adj_list[s_i] +
-                                        compressed_incoming_adj_index[s_i][p_v_i + 1].index));
+                                        compressed_incoming_adj_index[s_i][p_v_i + 1].index),
+                                -1);
                         }
                     }
                     // 线程窃取
@@ -2861,7 +2838,8 @@ public:
                                         incoming_adj_list[s_i] +
                                             compressed_incoming_adj_index[s_i][p_v_i +
                                                                                1]   // s_i出边结束
-                                                .index));
+                                                .index),
+                                    -1);
                             }
                         }
                     }
@@ -2954,15 +2932,10 @@ public:
 
         R global_reducer;
         MPI_Datatype dt = get_mpi_data_type<R>();
-        allreduce_time -= MPI_Wtime();
         MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
-        allreduce_time += MPI_Wtime();
-
-        total_allreduce_time += allreduce_time;
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("process_edges took %lf (s)\n", stream_time);
-            printf("allreduce took %lf (s)\n", allreduce_time);
         }
 #endif
         if (is_first && partition_id == 0) {

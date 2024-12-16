@@ -50,14 +50,14 @@ void compute(Graph<Empty>* graph, int iterations) {
         //稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
         graph->process_edges<int, double>(
             [&](VertexId src) { graph->emit(src, curr[src]); },
-            [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj) {
+            [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                     VertexId dst = ptr->neighbour;
                     write_add(&next[dst], msg);
                 }
                 return 0;
             },
-            [&](VertexId dst, VertexAdjList<Empty> incoming_adj) {
+            [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 double sum = 0;
                 for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                     VertexId src = ptr->neighbour;
@@ -142,8 +142,6 @@ int main(int argc, char** argv) {
     // for (int run=0;run<5;run++) {
     //   compute(graph, iterations);
     // }
-    // printf("total allreduce time =%lf(s)\n", graph->print_total_allreduce());
-    // printf("allreduce percent : %lf\n",graph->print_total_allreduce() /exec_time);
     delete graph;
     return 0;
 }
