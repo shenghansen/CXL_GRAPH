@@ -24,10 +24,20 @@ void compute(Graph<Empty> * graph, VertexId root) {
     // double exec_time = 0;
     exec_time -= get_time();
 
-    VertexId* parent = graph->alloc_vertex_array<VertexId>();
-    VertexSubset* visited = graph->alloc_vertex_subset();
-    VertexSubset* active_in = graph->alloc_vertex_subset();
-    VertexSubset* active_out = graph->alloc_vertex_subset();
+    // VertexId* parent = graph->alloc_vertex_array<VertexId>();
+    // VertexSubset* visited = graph->alloc_vertex_subset();
+    // VertexSubset* active_in = graph->alloc_vertex_subset();
+    // VertexSubset* active_out = graph->alloc_vertex_subset();
+    VertexSubset** global_visited = graph->alloc_global_vertex_subset();
+    VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
+    VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
+    VertexSubset* visited = global_visited[graph->partition_id];
+    VertexSubset* active_in = global_active_in[graph->partition_id];
+    VertexSubset* active_out = global_active_out[graph->partition_id];
+    VertexId** global_parent = graph->alloc_global_vertex_array<VertexId>();
+    VertexId* parent = global_parent[graph->partition_id];
+
+
 
     visited->clear();
     visited->set_bit(root);

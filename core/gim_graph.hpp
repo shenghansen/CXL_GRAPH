@@ -39,6 +39,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <utility>
 #include <vector>
 
+#include "bitmap.hpp"
 #include "communicate.h"
 #include "core/atomic.hpp"
 #include "core/bitmap.hpp"
@@ -609,6 +610,24 @@ public:
 
     // allocate a vertex subset
     VertexSubset* alloc_vertex_subset() { return new VertexSubset(vertices); }
+    VertexSubset** alloc_global_vertex_subset() {
+        VertexSubset** global_vertex_subset = new VertexSubset*[partitions];
+        for (int i = 0; i < partitions; i++) {
+            unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+                sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), i);
+            global_vertex_subset[i] = new VertexSubset(vertices, data);
+        }
+        return global_vertex_subset;
+    }
+
+    template<typename T> T** alloc_global_vertex_array() {
+        T** global_vertex_array = new T*[partitions];
+        for (int i = 0; i < partitions; i++) {
+            T* data = (T*)cxl_shm->GIM_malloc(sizeof(T) * vertices, i);
+            global_vertex_array[i] = data;
+        }
+        return global_vertex_array;
+    }
 
     // 根据点的index得到这个点所在分区（全局）的index
     int get_partition_id(VertexId v_i) {
@@ -1397,8 +1416,8 @@ public:
             gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
                 // gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices);
-                unsigned long* data =
-                    (unsigned long*)cxl_shm->GIM_malloc(sizeof(unsigned long)*(WORD_OFFSET(vertices) + 1), p_i);
+                unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+                    sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
                 // unsigned long* data =
                 //     (unsigned long*)cxl_shm->CXL_SHM_malloc((WORD_OFFSET(vertices) + 1));
 
@@ -2311,8 +2330,7 @@ public:
     R process_edges(
         std::function<void(VertexId)> sparse_signal,
         std::function<R(VertexId, M, VertexAdjList<EdgeData>, int partiton_id)> sparse_slot,
-        std::function<void(VertexId, VertexAdjList<EdgeData>, int partiton_id)>
-            dense_signal,
+        std::function<void(VertexId, VertexAdjList<EdgeData>, int partiton_id)> dense_signal,
         std::function<R(VertexId, M)> dense_slot, Bitmap* active,
         Bitmap* dense_selective = nullptr) {
         double stream_time = 0;
@@ -2575,9 +2593,8 @@ public:
                                                 outgoing_adj_index[s_i]
                                                                   [v_i],   // s_i内v_i的出边开始
                                             outgoing_adj_list[s_i] +
-                                                outgoing_adj_index[s_i]
-                                                                  [v_i +
-                                                                   1]),-1);   // s_i内v_i的出边结束
+                                                outgoing_adj_index[s_i][v_i + 1]),
+                                        -1);   // s_i内v_i的出边结束
                                 }
                             }
                         }
@@ -2608,7 +2625,8 @@ public:
                                                 outgoing_adj_list[s_i] +
                                                     outgoing_adj_index[s_i][v_i],
                                                 outgoing_adj_list[s_i] +
-                                                    outgoing_adj_index[s_i][v_i + 1]),-1);
+                                                    outgoing_adj_index[s_i][v_i + 1]),
+                                            -1);
                                     }
                                 }
                             }
@@ -2621,8 +2639,7 @@ public:
             recv_thread.join();
             process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
             delete[] recv_queue;
-        } 
-        else {
+        } else {
             // dense selective bitmap
             if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
                 double sync_time = 0;
@@ -2844,6 +2861,8 @@ public:
                         }
                     }
                 }
+
+                // 全部执行完后再flush
 #pragma omp parallel for
                 for (int t_i = 0; t_i < threads; t_i++) {
                     flush_local_send_buffer<M>(t_i);
@@ -2856,8 +2875,13 @@ public:
                     send_queue_mutex.unlock();
                 }
             }
+
+
             process_edge_time[2] = MPI_Wtime() + stream_time;
 
+
+
+            // dense_slot
             for (int step = 0; step < partitions; step++) {
                 while (true) {
                     recv_queue_mutex.lock();
