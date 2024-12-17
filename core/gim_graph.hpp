@@ -459,12 +459,12 @@ public:
         alpha = 8 * (partitions - 1);
         global_current_send_part_id =
             (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partition_id);
-        stealings = (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(
-            sizeof(std::atomic<int>) * partitions);
-        for(int i=0;i<partitions;i++){
+        stealings =
+            (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partitions);
+        for (int i = 0; i < partitions; i++) {
             stealings[i].store(0);
         }
-         MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
     }
 
     void init_gim_buffer() {
@@ -2294,6 +2294,108 @@ public:
         return global_reducer;
     }
 
+    template<typename R> R process_vertices_global(std::function<R(VertexId)> process, Bitmap** active) {
+        double stream_time = 0;
+        stream_time -= MPI_Wtime();
+
+        R reducer = 0;
+        size_t basic_chunk = 64;   // 每次处理的顶点数，和WORD的位数是对应的
+        for (int t_i = 0; t_i < threads; t_i++) {
+            int s_i = get_socket_id(t_i);
+            int s_j = get_socket_offset(t_i);
+            VertexId partition_size = local_partition_offset[s_i + 1] -
+                                      local_partition_offset[s_i];   // 每个分区的点的数量
+            thread_state[t_i]->curr =
+                local_partition_offset[s_i] +
+                partition_size / threads_per_socket / basic_chunk * basic_chunk *
+                    s_j;   // 设置线程的curr，处理点的起始位置，和basic_chunk对齐
+            thread_state[t_i]->end =
+                local_partition_offset[s_i] + partition_size / threads_per_socket / basic_chunk *
+                                                  basic_chunk * (s_j + 1);   // 设置线程的end
+            if (s_j == threads_per_socket - 1) {
+                thread_state[t_i]->end = local_partition_offset[s_i + 1];   // 设置最后一个线程的end
+            }
+            thread_state[t_i]->status = WORKING;
+        }
+#pragma omp parallel reduction(+ : reducer)
+        {
+            R local_reducer = 0;
+            int thread_id = omp_get_thread_num();
+            while (true) {
+                VertexId v_i = __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
+                if (v_i >=
+                    thread_state[thread_id]->end)   // 遍历当前线程要处理的点，一次处理basic_chunk
+                    break;
+                unsigned long word =
+                    active[partition_id]->data[WORD_OFFSET(v_i)];   // 根据Bitmap *active决定是否执行process
+                while (word != 0) {
+                    if (word & 1) {
+                        local_reducer += process(v_i);
+                    }
+                    v_i++;
+                    word = word >> 1;
+                }
+            }
+            // 当前线程的任务处理完后，将状态设置为 STEALING，表示它可能会去“偷取”其他线程的任务
+            thread_state[thread_id]->status = STEALING;
+            for (int t_offset = 1; t_offset < threads; t_offset++) {
+                int t_i = (thread_id + t_offset) % threads;
+                while (thread_state[t_i]->status !=
+                       STEALING) {   // 如果目标线程的状态不是 STEALING，则尝试窃取工作。
+                    VertexId v_i = __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
+                    if (v_i >= thread_state[t_i]->end) continue;
+                    unsigned long word = active[partition_id]->data[WORD_OFFSET(v_i)];
+                    while (word != 0) {
+                        if (word & 1) {
+                            local_reducer += process(v_i);
+                        }
+                        v_i++;
+                        word = word >> 1;
+                    }
+                }
+            }
+            reducer += local_reducer;
+        }
+        // 全局工作窃取
+        for (int step = 1; step < partitions; step++) {
+            int i = (partition_id - step + partitions) % partitions;
+#pragma omp parallel reduction(+ : reducer)
+            {
+                R local_reducer = 0;
+                int thread_id = omp_get_thread_num();
+                for (int t_offset = 0; t_offset < threads; t_offset++) {
+                    int t_i = (thread_id + t_offset) % threads;
+                    while (gim_thread_state[i][t_i]->status !=
+                           STEALING) {   // 如果目标线程的状态不是 STEALING，则尝试窃取工作。
+                        VertexId v_i =
+                            __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr, basic_chunk);
+                        if (v_i >= gim_thread_state[i][t_i]->end) continue;
+                        unsigned long word = active[i]->data[WORD_OFFSET(v_i)];
+                        while (word != 0) {
+                            if (word & 1) {
+                                local_reducer += process(v_i);
+                            }
+                            v_i++;
+                            word = word >> 1;
+                        }
+                    }
+                }
+                reducer += local_reducer;
+            }
+        }
+        // 当本host的任务都完成，开始全局规约
+        R global_reducer;
+        MPI_Datatype dt = get_mpi_data_type<R>();
+        MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
+        stream_time += MPI_Wtime();
+#ifdef PRINT_DEBUG_MESSAGES
+        if (partition_id == 0) {
+            printf("process_vertices took %lf (s)\n", stream_time);
+        }
+#endif
+        return global_reducer;
+    }
+
     // 将本地线程的发送缓冲区的数据刷新到全局发送缓冲区
     // 全局的send_buffer怎么知道local_send_bufferd的位置呢，不是每个大小都是 local_send_buffer_limit
     //  template<typename M> void flush_local_send_buffer(int t_i) {
@@ -2335,7 +2437,7 @@ public:
     }
 
     // need rewrite current_send_part_id ,make it shared
-    template<typename M> void flush_local_send_buffer_to_other(int t_i,int id) {
+    template<typename M> void flush_local_send_buffer_to_other(int t_i, int id) {
         int s_i = get_socket_id(t_i);   // 线程在那个socket
         int pos = __sync_fetch_and_add(
             &gim_send_buffer[id][global_current_send_part_id[id]][s_i]->count,
@@ -2383,8 +2485,8 @@ public:
             [&](VertexId vtx) { return (EdgeId)out_degree[vtx]; },
             active);
         bool sparse = (active_edges < edges / 20);
-        
-        if(partition_id==0) printf("spare:%d\n",sparse);
+
+        if (partition_id == 0) printf("spare:%d\n", sparse);
         size_t send_buffer_size = 0;
         size_t recv_buffer_size = 0;
         if (sparse) {
@@ -2414,8 +2516,7 @@ public:
                                         (partition_offset[i + 1] - partition_offset[i]) * sockets;
                 }
             }
-        }
-         else {
+        } else {
             for (int i = 0; i < partitions; i++) {   // 稠密模式每个host要接受数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
 
@@ -2903,8 +3004,8 @@ public:
                 for (int t_i = 0; t_i < threads; t_i++) {
                     flush_local_send_buffer<M>(t_i);
                 }
-                //确保其他节点窃取的任务完成
-                while(stealings[partition_id].load()!=0){
+                // 确保其他节点窃取的任务完成
+                while (stealings[partition_id].load() != 0) {
                     // printf("stealings:%d\n",stealings[partition_id].load());
                     __asm volatile("pause" ::: "memory");
                 }
@@ -2916,94 +3017,98 @@ public:
                     send_queue_mutex.unlock();
                 }
             }
-            //全局工作窃取
-//             for (int step = 1; step < partitions; step++) {
-//                 int i = (partition_id - step + partitions) %
-//                         partitions;   
-//                 //怎么判断这个节点需不需要工作窃取
-//                 if(global_current_send_part_id[i]==i){
-//                     continue;
-//                 }
-//                 stealings[i]++;
-// #pragma omp parallel
-//                 {
-//                     int thread_id = omp_get_thread_num();
-//                     int s_i = get_socket_id(thread_id);
+            // 全局工作窃取
+            //             for (int step = 1; step < partitions; step++) {
+            //                 int i = (partition_id - step + partitions) %
+            //                         partitions;
+            //                 //怎么判断这个节点需不需要工作窃取
+            //                 if(global_current_send_part_id[i]==i){
+            //                     continue;
+            //                 }
+            //                 stealings[i]++;
+            // #pragma omp parallel
+            //                 {
+            //                     int thread_id = omp_get_thread_num();
+            //                     int s_i = get_socket_id(thread_id);
 
-//                     for (int t_offset = 0; t_offset < threads; t_offset++) {
-//                         int t_i = (thread_id + t_offset) % threads;
-//                         int s_i = get_socket_id(t_i);
-//                         while (gim_thread_state[i][t_i]->status != STEALING) {
-//                             VertexId begin_p_v_i =
-//                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr, basic_chunk);
-//                             if (begin_p_v_i >= gim_thread_state[i][t_i]->end) break;
-//                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-//                             if (end_p_v_i > gim_thread_state[i][t_i]->end) {
-//                                 end_p_v_i = gim_thread_state[i][t_i]->end;
-//                             }
-//                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-//                                 VertexId v_i = gim_compressed_incoming_adj_index[i][s_i][p_v_i].vertex;
-//                                 dense_signal(
-//                                     v_i,
-//                                     VertexAdjList<EdgeData>(
-//                                         gim_incoming_adj_list[i][s_i] +
-//                                             gim_compressed_incoming_adj_index[i][s_i][p_v_i]
-//                                                 .index,   // s_i出边开始
-//                                         gim_incoming_adj_list[i][s_i] +
-//                                             gim_compressed_incoming_adj_index[i][s_i]
-//                                                                              [p_v_i +
-//                                                                               1]   // s_i出边结束
-//                                                                                  .index),
-//                                     i);
-//                             }
-//                         }
-//                     }
-//                 }
-// #pragma omp parallel for
-//                 for (int t_i = 0; t_i < threads; t_i++) {
-//                     flush_local_send_buffer_to_other<M>(t_i,i);
-//                 }
-//                 stealings[i]--;
-//             }
+            //                     for (int t_offset = 0; t_offset < threads; t_offset++) {
+            //                         int t_i = (thread_id + t_offset) % threads;
+            //                         int s_i = get_socket_id(t_i);
+            //                         while (gim_thread_state[i][t_i]->status != STEALING) {
+            //                             VertexId begin_p_v_i =
+            //                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
+            //                                 basic_chunk);
+            //                             if (begin_p_v_i >= gim_thread_state[i][t_i]->end) break;
+            //                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
+            //                             if (end_p_v_i > gim_thread_state[i][t_i]->end) {
+            //                                 end_p_v_i = gim_thread_state[i][t_i]->end;
+            //                             }
+            //                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i;
+            //                             p_v_i++) {
+            //                                 VertexId v_i =
+            //                                 gim_compressed_incoming_adj_index[i][s_i][p_v_i].vertex;
+            //                                 dense_signal(
+            //                                     v_i,
+            //                                     VertexAdjList<EdgeData>(
+            //                                         gim_incoming_adj_list[i][s_i] +
+            //                                             gim_compressed_incoming_adj_index[i][s_i][p_v_i]
+            //                                                 .index,   // s_i出边开始
+            //                                         gim_incoming_adj_list[i][s_i] +
+            //                                             gim_compressed_incoming_adj_index[i][s_i]
+            //                                                                              [p_v_i +
+            //                                                                               1]   //
+            //                                                                               s_i出边结束
+            //                                                                                  .index),
+            //                                     i);
+            //                             }
+            //                         }
+            //                     }
+            //                 }
+            // #pragma omp parallel for
+            //                 for (int t_i = 0; t_i < threads; t_i++) {
+            //                     flush_local_send_buffer_to_other<M>(t_i,i);
+            //                 }
+            //                 stealings[i]--;
+            //             }
 
 
-                process_edge_time[2] = MPI_Wtime() + stream_time;
+            process_edge_time[2] = MPI_Wtime() + stream_time;
 
 
 
-                // dense_slot
-                for (int step = 0; step < partitions; step++) {
-                    while (true) {
-                        recv_queue_mutex.lock();
-                        bool condition = (recv_queue_size <= step);
-                        recv_queue_mutex.unlock();
-                        if (!condition) break;
-                        __asm volatile("pause" ::: "memory");
-                    }   // 接受完一个就启动计算
-                    int i = recv_queue[step];
-                    // MessageBuffer** used_buffer;
-                    GIMMessageBuffer** used_buffer;
-                    if (i == partition_id) {
-                        // used_buffer = send_buffer[i];
-                        used_buffer = gim_send_buffer[partition_id][i];
-                    } else {
-                        // used_buffer = recv_buffer[i];
-                        used_buffer = gim_recv_buffer[partition_id][i];
+            // dense_slot
+            for (int step = 0; step < partitions; step++) {
+                while (true) {
+                    recv_queue_mutex.lock();
+                    bool condition = (recv_queue_size <= step);
+                    recv_queue_mutex.unlock();
+                    if (!condition) break;
+                    __asm volatile("pause" ::: "memory");
+                }   // 接受完一个就启动计算
+                int i = recv_queue[step];
+                // MessageBuffer** used_buffer;
+                GIMMessageBuffer** used_buffer;
+                if (i == partition_id) {
+                    // used_buffer = send_buffer[i];
+                    used_buffer = gim_send_buffer[partition_id][i];
+                } else {
+                    // used_buffer = recv_buffer[i];
+                    used_buffer = gim_recv_buffer[partition_id][i];
+                }
+                // 确定每个线程负责buffer的哪个部分
+                for (int t_i = 0; t_i < threads; t_i++) {
+                    int s_i = get_socket_id(t_i);
+                    int s_j = get_socket_offset(t_i);
+                    VertexId partition_size = used_buffer[s_i]->count;
+                    thread_state[t_i]->curr =
+                        partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
+                    thread_state[t_i]->end =
+                        partition_size / threads_per_socket / basic_chunk * basic_chunk * (s_j + 1);
+                    if (s_j == threads_per_socket - 1) {
+                        thread_state[t_i]->end = used_buffer[s_i]->count;
                     }
-                    // 确定每个线程负责buffer的哪个部分
-                    for (int t_i = 0; t_i < threads; t_i++) {
-                        int s_i = get_socket_id(t_i);
-                        int s_j = get_socket_offset(t_i);
-                        VertexId partition_size = used_buffer[s_i]->count;
-                        thread_state[t_i]->curr =
-                            partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
-                        thread_state[t_i]->end = partition_size / threads_per_socket / basic_chunk *
-                                                 basic_chunk * (s_j + 1);
-                        if (s_j == threads_per_socket - 1) {
-                            thread_state[t_i]->end = used_buffer[s_i]->count;
-                        }
-                        thread_state[t_i]->status = WORKING;
-                    }
+                    thread_state[t_i]->status = WORKING;
+                }
 #pragma omp parallel reduction(+ : reducer)
                 {
                     R local_reducer = 0;
@@ -3034,7 +3139,7 @@ public:
             recv_thread.join();
             delete[] send_queue;
             delete[] recv_queue;
-            }
+        }
         process_edge_time[3] = MPI_Wtime() - process_edge_time[2] + stream_time;
 
         stream_time += MPI_Wtime();

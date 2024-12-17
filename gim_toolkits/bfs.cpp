@@ -97,13 +97,20 @@ void compute(Graph<Empty> * graph, VertexId root) {
             },
             active_in,
             visited);
-        active_vertices = graph->process_vertices<VertexId>(   //用来标记点访问过了
+        // active_vertices = graph->process_vertices<VertexId>(   //用来标记点访问过了
+        //     [&](VertexId vtx) {
+        //         visited->set_bit(vtx);
+        //         return 1;
+        //     },
+        //     active_out);
+        active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
             [&](VertexId vtx) {
                 visited->set_bit(vtx);
                 return 1;
             },
-            active_out);
+            global_active_out);
         std::swap(active_in, active_out);
+        std::swap(global_active_in, global_active_out);
     }
 
   exec_time += get_time();
@@ -113,15 +120,15 @@ void compute(Graph<Empty> * graph, VertexId root) {
   printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
   graph->gather_vertex_array(parent, 0);
 
-  // if (graph->partition_id==0) {
-  //   VertexId found_vertices = 0;
-  //   for (VertexId v_i=0;v_i<graph->vertices;v_i++) {
-  //     if (parent[v_i] < graph->vertices) {
-  //       found_vertices += 1;
-  //     }
-  //   }
-  //   printf("found_vertices = %u\n", found_vertices);
-  // }
+  if (graph->partition_id==0) {
+    VertexId found_vertices = 0;
+    for (VertexId v_i=0;v_i<graph->vertices;v_i++) {
+      if (parent[v_i] < graph->vertices) {
+        found_vertices += 1;
+      }
+    }
+    printf("found_vertices = %u\n", found_vertices);
+  }
 
   graph->dealloc_vertex_array(parent);
   delete active_in;
