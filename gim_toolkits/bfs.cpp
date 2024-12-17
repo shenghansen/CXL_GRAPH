@@ -45,7 +45,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
     active_in->set_bit(root);
     graph->fill_vertex_array(parent, graph->vertices);
     parent[root] = root;
-
+    MPI_Barrier(MPI_COMM_WORLD);
     VertexId active_vertices = 1;
 
     for (int i_i = 0; active_vertices > 0; i_i++) {
@@ -67,14 +67,26 @@ void compute(Graph<Empty> * graph, VertexId root) {
                 return activated;
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if (visited->get_bit(dst)) return;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    if (active_in->get_bit(src)) {
-                        graph->emit(dst, src);
-                        break;
+                if(partition_id==-1){
+                    if (visited->get_bit(dst)) return;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (active_in->get_bit(src)) {
+                            graph->emit(dst, src);
+                            break;
+                        }
+                    }
+                }else{
+                    if (global_visited[partition_id]->get_bit(dst)) return;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (global_active_in[partition_id]->get_bit(src)) {
+                            graph->emit_other(dst, src,partition_id);
+                            break;
+                        }
                     }
                 }
+                
             },
             [&](VertexId dst, VertexId msg) {
                 if (cas(&parent[dst], graph->vertices, msg)) {
