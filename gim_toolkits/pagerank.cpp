@@ -18,6 +18,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdlib.h>
 
 #include "core/gim_graph.hpp"
+#include "mpi.h"
 
 #include <math.h>
 
@@ -26,11 +27,19 @@ double exec_time = 0;
 void compute(Graph<Empty>* graph, int iterations) {
 
     exec_time -= get_time();
-
-    double* curr = graph->alloc_vertex_array<double>();
-    double* next = graph->alloc_vertex_array<double>();
-    VertexSubset* active = graph->alloc_vertex_subset();
+    double** global_curr = graph->alloc_global_vertex_array<double>();
+    double** global_next = graph->alloc_global_vertex_array<double>();
+    VertexSubset** global_active = graph->alloc_global_vertex_subset();
+    MPI_Barrier(MPI_COMM_WORLD);
+    double* curr = global_curr[graph->partition_id];
+    double* next = global_next[graph->partition_id];
+    VertexSubset* active = global_active[graph->partition_id];
+    // double* curr = graph->alloc_vertex_array<double>();
+    // double* next = graph->alloc_vertex_array<double>();
+    // VertexSubset* active = graph->alloc_vertex_subset();
+    
     active->fill();   //处理所有点
+    
     //当前PR值除以出度
     double delta = graph->process_vertices<double>(
         [&](VertexId vtx) {
@@ -41,6 +50,23 @@ void compute(Graph<Empty>* graph, int iterations) {
             return (double)1;
         },
         active);
+    // double delta = graph->process_vertices_global<double>(
+    //     [&](VertexId vtx,int partition_id) {
+    //         if(partition_id==-1){
+    //             curr[vtx] = (double)1;
+    //             if (graph->out_degree[vtx] > 0) {
+    //                 curr[vtx] /= graph->out_degree[vtx];
+    //             }
+    //             return (double)1;
+    //         }else{
+    //             global_curr[partition_id][vtx] = (double)1;
+    //             if (graph->out_degree[vtx] > 0) {
+    //                 global_curr[partition_id][vtx] /= graph->gim_out_degree[partition_id][vtx];
+    //             }
+    //             return (double)1;
+    //         }
+    //     },
+    //     glocal_active);
     delta /= graph->vertices;
     for (int i_i = 0; i_i < iterations; i_i++) {
         if (graph->partition_id==0) {
@@ -77,6 +103,17 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return 0;
                 },
                 active);
+            // delta = graph->process_vertices_global<double>(
+            //     [&](VertexId vtx, int partition_id) {
+            //         if(partition_id==-1){
+            //             next[vtx] = 1 - d + d * next[vtx];
+            //         }else{
+            //             global_next[partition_id][vtx] = 1 - d + d * global_next[partition_id][vtx];
+            //         }
+                    
+            //         return 0;
+            //     },
+            //     glocal_active);
         } else {
             delta = graph->process_vertices<double>(
                 [&](VertexId vtx) {
@@ -88,9 +125,34 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return fabs(next[vtx] - curr[vtx]);
                 },
                 active);
+        //     delta = graph->process_vertices_global<double>(
+        //         [&](VertexId vtx, int partition_id) {
+        //             if(partition_id==-1){
+        //                 next[vtx] = 1 - d + d * next[vtx];
+        //                 if (graph->out_degree[vtx] > 0) {
+        //                     next[vtx] /= graph->out_degree[vtx];
+        //                     return fabs(next[vtx] - curr[vtx]) * graph->out_degree[vtx];
+        //                 }
+        //                 return fabs(next[vtx] - curr[vtx]);
+        //             }else{
+        //                 global_next[partition_id][vtx] = 1 - d + d * global_next[partition_id][vtx];
+        //                 if (graph->gim_out_degree[partition_id][vtx] > 0) {
+        //                     global_next[partition_id][vtx] /=
+        //                         graph->gim_out_degree[partition_id][vtx];
+        //                     return fabs(global_next[partition_id][vtx] -
+        //                                 global_curr[partition_id][vtx]) *
+        //                            graph->gim_out_degree[partition_id][vtx];
+        //                 }
+        //                 return fabs(global_next[partition_id][vtx] -
+        //                             global_curr[partition_id][vtx]);
+        //             }
+                    
+        //         },
+        //         glocal_active);
         }
         delta /= graph->vertices;
         std::swap(curr, next);
+        std::swap(global_curr,global_next);
     }
 
     exec_time += get_time();
@@ -100,6 +162,12 @@ void compute(Graph<Empty>* graph, int iterations) {
     printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
     double pr_sum =
         graph->process_vertices<double>([&](VertexId vtx) { return curr[vtx]; }, active);
+    // double pr_sum = graph->process_vertices_global<double>(
+        // [&](VertexId vtx, int partition_id) { if(partition_id==-1){
+        //     return curr[vtx];
+        // }else{
+        //     return global_curr[partition_id][vtx];
+        // } }, glocal_active);
     if (graph->partition_id == 0) {
         printf("pr_sum=%lf\n", pr_sum);
     }
@@ -110,7 +178,7 @@ void compute(Graph<Empty>* graph, int iterations) {
         for (VertexId v_i = 0; v_i < graph->vertices; v_i++) {
             if (curr[v_i] > curr[max_v_i]) max_v_i = v_i;
         }
-        // printf("pr[%u]=%lf\n", max_v_i, curr[max_v_i]);
+        printf("pr[%u]=%lf\n", max_v_i, curr[max_v_i]);
     }
 
     graph->dealloc_vertex_array(curr);

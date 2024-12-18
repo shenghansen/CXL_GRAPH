@@ -31,6 +31,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
     VertexSubset** global_visited = graph->alloc_global_vertex_subset();
     VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
     VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
+    MPI_Barrier(MPI_COMM_WORLD);
     VertexSubset* visited = global_visited[graph->partition_id];
     VertexSubset* active_in = global_active_in[graph->partition_id];
     VertexSubset* active_out = global_active_out[graph->partition_id];
@@ -104,9 +105,14 @@ void compute(Graph<Empty> * graph, VertexId root) {
         //     },
         //     active_out);
         active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
-            [&](VertexId vtx) {
+            [&](VertexId vtx,int partition_id) {
+                if(partition_id==-1){
                 visited->set_bit(vtx);
-                return 1;
+                return 1;}
+                else{
+                    global_visited[partition_id]->set_bit(vtx);
+                    return 1;
+                }
             },
             global_active_out);
         std::swap(active_in, active_out);

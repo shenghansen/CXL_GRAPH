@@ -18,6 +18,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdlib.h>
 
 #include "core/gim_graph.hpp"
+#include "mpi.h"
 
 #define COMPACT 0
 double exec_time = 0;
@@ -25,13 +26,28 @@ void compute(Graph<Empty> * graph, VertexId root) {
   
   exec_time -= get_time();
 
-  double * num_paths = graph->alloc_vertex_array<double>();
-  double * dependencies = graph->alloc_vertex_array<double>();
-  VertexSubset * active_all = graph->alloc_vertex_subset();
+  // double * num_paths = graph->alloc_vertex_array<double>();
+  // double * dependencies = graph->alloc_vertex_array<double>();
+  // VertexSubset * active_all = graph->alloc_vertex_subset();
+  // VertexSubset * visited = graph->alloc_vertex_subset();
+  // VertexSubset * active_in = graph->alloc_vertex_subset();
+
+  double** global_num_paths = graph->alloc_global_vertex_array<double>();
+  double** global_dependencies = graph->alloc_global_vertex_array<double>();
+  VertexSubset** global_active_all = graph->alloc_global_vertex_subset();
+  VertexSubset** global_visited = graph->alloc_global_vertex_subset();
+  VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
+
+  double* num_paths = global_num_paths[graph->partition_id];
+  double* dependencies = global_dependencies[graph->partition_id];
+  VertexSubset* active_all = global_active_all[graph->partition_id];
+  VertexSubset* visited = global_visited[graph->partition_id];
+  VertexSubset* active_in = global_active_in[graph->partition_id];
+
+
+  MPI_Barrier(MPI_COMM_WORLD);
   active_all->fill();
-  VertexSubset * visited = graph->alloc_vertex_subset();
-  std::vector<VertexSubset *> levels;
-  VertexSubset * active_in = graph->alloc_vertex_subset();
+  std::vector<VertexSubset*> levels;
 
   VertexId active_vertices = 1;
   visited->clear();

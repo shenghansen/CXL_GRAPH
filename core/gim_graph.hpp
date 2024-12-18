@@ -242,6 +242,10 @@ public:
     /*  current_send_part_id*/
     std::atomic<int>* global_current_send_part_id;
     std::atomic<int>* stealings;
+    /* degree */
+    VertexId**
+        gim_out_degree;   
+    VertexId** gim_in_degree;
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -624,7 +628,10 @@ public:
         for (int i = 0; i < partitions; i++) {
             unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
                 sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), i);
+            // unsigned long* data = (unsigned long*)malloc(
+                // sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1));
             global_vertex_subset[i] = new VertexSubset(vertices, data);
+            // global_vertex_subset[i] = new VertexSubset(vertices);
         }
         return global_vertex_subset;
     }
@@ -1225,7 +1232,12 @@ public:
         EdgeUnit<EdgeData>* read_edge_buffer =
             new EdgeUnit<EdgeData>[CHUNKSIZE];   // 将边的数据读到这里
 
-        out_degree = alloc_interleaved_vertex_array<VertexId>();
+        gim_out_degree = new VertexId*[partitions];
+        for (int i=0;i<partitions;i++) {
+            gim_out_degree[i] = (VertexId*)cxl_shm->GIM_malloc(sizeof(VertexId) * vertices, i);
+        }
+        //  out_degree = alloc_interleaved_vertex_array<VertexId>();
+        out_degree=gim_out_degree[partition_id];
         for (VertexId v_i = 0; v_i < vertices; v_i++) {
             out_degree[v_i] = 0;
         }
@@ -2294,7 +2306,7 @@ public:
         return global_reducer;
     }
 
-    template<typename R> R process_vertices_global(std::function<R(VertexId)> process, Bitmap** active) {
+    template<typename R> R process_vertices_global(std::function<R(VertexId,int)> process, Bitmap** active) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
 
@@ -2330,7 +2342,7 @@ public:
                     active[partition_id]->data[WORD_OFFSET(v_i)];   // 根据Bitmap *active决定是否执行process
                 while (word != 0) {
                     if (word & 1) {
-                        local_reducer += process(v_i);
+                        local_reducer += process(v_i,-1);
                     }
                     v_i++;
                     word = word >> 1;
@@ -2347,7 +2359,7 @@ public:
                     unsigned long word = active[partition_id]->data[WORD_OFFSET(v_i)];
                     while (word != 0) {
                         if (word & 1) {
-                            local_reducer += process(v_i);
+                            local_reducer += process(v_i,-1);
                         }
                         v_i++;
                         word = word >> 1;
@@ -2373,7 +2385,7 @@ public:
                         unsigned long word = active[i]->data[WORD_OFFSET(v_i)];
                         while (word != 0) {
                             if (word & 1) {
-                                local_reducer += process(v_i);
+                                local_reducer += process(v_i,i);
                             }
                             v_i++;
                             word = word >> 1;

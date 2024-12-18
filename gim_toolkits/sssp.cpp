@@ -18,6 +18,7 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdlib.h>
 
 #include "core/gim_graph.hpp"
+#include "mpi.h"
 
 typedef float Weight;
   double exec_time = 0;
@@ -25,9 +26,16 @@ void compute(Graph<Weight> * graph, VertexId root) {
 
   exec_time -= get_time();
 
-  Weight * distance = graph->alloc_vertex_array<Weight>();
-  VertexSubset * active_in = graph->alloc_vertex_subset();
-  VertexSubset * active_out = graph->alloc_vertex_subset();
+  // Weight * distance = graph->alloc_vertex_array<Weight>();
+  // VertexSubset * active_in = graph->alloc_vertex_subset();
+  // VertexSubset * active_out = graph->alloc_vertex_subset();
+  Weight** global_distance = graph->alloc_global_vertex_array<Weight>();
+  VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
+  VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
+  Weight* distance = global_distance[graph->partition_id];
+  VertexSubset* active_in = global_active_in[graph->partition_id];
+  VertexSubset* active_out = global_active_out[graph->partition_id];
+  MPI_Barrier(MPI_COMM_WORLD);
   active_in->clear();
   active_in->set_bit(root);
   graph->fill_vertex_array(distance, (Weight)1e9);
@@ -93,7 +101,7 @@ void compute(Graph<Weight> * graph, VertexId root) {
         max_v_i = v_i;
       }
     }
-    // printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
+    printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
   }
 
   graph->dealloc_vertex_array(distance);
