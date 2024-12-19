@@ -50,18 +50,33 @@ void compute(Graph<Weight> * graph, VertexId root) {
     active_vertices = graph->process_edges<VertexId, Weight>(
         [&](VertexId src) { graph->emit(src, distance[src]); },
         [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj, int partition_id) {
-            VertexId activated = 0;
-            for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                VertexId dst = ptr->neighbour;
-                Weight relax_dist = msg + ptr->edge_data;
-                if (relax_dist < distance[dst]) {
-                    if (write_min(&distance[dst], relax_dist)) {
-                        active_out->set_bit(dst);
-                        activated += 1;
+            if(partition_id==-1){
+                VertexId activated = 0;
+                for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                    VertexId dst = ptr->neighbour;
+                    Weight relax_dist = msg + ptr->edge_data;
+                    if (relax_dist < distance[dst]) {
+                        if (write_min(&distance[dst], relax_dist)) {
+                            active_out->set_bit(dst);
+                            activated += 1;
+                        }
                     }
                 }
+                return activated;
+            }else{
+                VertexId activated = 0;
+                for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                    VertexId dst = ptr->neighbour;
+                    Weight relax_dist = msg + ptr->edge_data;
+                    if (relax_dist < global_distance[partition_id][dst]) {
+                        if (write_min(&global_distance[partition_id][dst], relax_dist)) {
+                            global_active_out[partition_id]->set_bit(dst);
+                            activated += 1;
+                        }
+                    }
+                }
+                return activated;
             }
-            return activated;
         },
         [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
             Weight msg = 1e9;
@@ -86,6 +101,7 @@ void compute(Graph<Weight> * graph, VertexId root) {
         },
         active_in);
     std::swap(active_in, active_out);
+    std::swap(global_active_in, global_active_out);
   }
 
   exec_time += get_time();

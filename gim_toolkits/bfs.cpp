@@ -57,15 +57,29 @@ void compute(Graph<Empty> * graph, VertexId root) {
         active_vertices = graph->process_edges<VertexId, VertexId>(
             [&](VertexId src) { graph->emit(src, src); },
             [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
-                VertexId activated = 0;
-                for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    if (parent[dst] == graph->vertices && cas(&parent[dst], graph->vertices, src)) {
-                        active_out->set_bit(dst);
-                        activated += 1;
-                    }
-                }
-                return activated;
+               if (partition_id==-1) {
+                   VertexId activated = 0;
+                   for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                       VertexId dst = ptr->neighbour;
+                       if (parent[dst] == graph->vertices &&
+                           cas(&parent[dst], graph->vertices, src)) {
+                           active_out->set_bit(dst);
+                           activated += 1;
+                       }
+                   }
+                   return activated;
+               }else{
+                   VertexId activated = 0;
+                   for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                       VertexId dst = ptr->neighbour;
+                       if (global_parent[partition_id][dst] == graph->vertices &&
+                           cas(&global_parent[partition_id][dst], graph->vertices, src)) {
+                           global_active_out[partition_id]->set_bit(dst);
+                           activated += 1;
+                       }
+                   }
+                   return activated;
+               }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 if(partition_id==-1){
@@ -98,23 +112,23 @@ void compute(Graph<Empty> * graph, VertexId root) {
             },
             active_in,
             visited);
-        // active_vertices = graph->process_vertices<VertexId>(   //用来标记点访问过了
-        //     [&](VertexId vtx) {
-        //         visited->set_bit(vtx);
-        //         return 1;
-        //     },
-        //     active_out);
-        active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
-            [&](VertexId vtx,int partition_id) {
-                if(partition_id==-1){
+        active_vertices = graph->process_vertices<VertexId>(   //用来标记点访问过了
+            [&](VertexId vtx) {
                 visited->set_bit(vtx);
-                return 1;}
-                else{
-                    global_visited[partition_id]->set_bit(vtx);
-                    return 1;
-                }
+                return 1;
             },
-            global_active_out);
+            active_out);
+        // active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
+        //     [&](VertexId vtx,int partition_id) {
+        //         if(partition_id==-1){
+        //         visited->set_bit(vtx);
+        //         return 1;}
+        //         else{
+        //             global_visited[partition_id]->set_bit(vtx);
+        //             return 1;
+        //         }
+        //     },
+        //     global_active_out);
         std::swap(active_in, active_out);
         std::swap(global_active_in, global_active_out);
     }

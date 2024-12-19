@@ -77,11 +77,19 @@ void compute(Graph<Empty>* graph, int iterations) {
         graph->process_edges<int, double>(
             [&](VertexId src) { graph->emit(src, curr[src]); },
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
-                for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    write_add(&next[dst], msg);
+                if (partition_id==-1) {
+                    for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                        VertexId dst = ptr->neighbour;
+                        write_add(&next[dst], msg);
+                    }
+                    return 0;
+                }else{
+                    for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+                        VertexId dst = ptr->neighbour;
+                        write_add(&global_next[partition_id][dst], msg);
+                    }
+                    return 0;
                 }
-                return 0;
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 double sum = 0;

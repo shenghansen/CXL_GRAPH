@@ -49,6 +49,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include "core/mpi.hpp"
 #include "core/time.hpp"
 #include "core/type.hpp"
+#include "mpi.h"
 
 
 
@@ -242,6 +243,7 @@ public:
     /*  current_send_part_id*/
     std::atomic<int>* global_current_send_part_id;
     std::atomic<int>* stealings;
+    int* stealingss;
     /* degree */
     VertexId** gim_out_degree;
     VertexId** gim_in_degree;
@@ -464,8 +466,10 @@ public:
             (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partition_id);
         stealings =
             (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partitions);
+        stealingss = (int*)cxl_shm->CXL_SHM_malloc(sizeof(int) * partitions);
         for (int i = 0; i < partitions; i++) {
             stealings[i].store(0);
+            stealingss[i] = 0;
         }
         MPI_Barrier(MPI_COMM_WORLD);
     }
@@ -1939,7 +1943,7 @@ public:
             }
         }
         compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
-
+        MPI_Barrier(MPI_COMM_WORLD);
         for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历numa
             incoming_edges[s_i] = 0;
             compressed_incoming_adj_vertices[s_i] = 0;
@@ -2009,6 +2013,7 @@ public:
                 //     global_max*unit_size);
             }
         }
+        MPI_Barrier(MPI_COMM_WORLD);
         incoming_adj_list = gim_incoming_adj_list[partition_id];
         data_size["incoming_adj_list"] = incoming_adj_list_size;
         data_size["compressed_incoming_adj_index"] = compressed_incoming_adj_index_size;
@@ -2681,6 +2686,7 @@ public:
                     __asm volatile("pause" ::: "memory");
                 }
                 int i = recv_queue[step];
+                global_current_send_part_id[partition_id]=i;
                 // MessageBuffer** used_buffer;
                 GIMMessageBuffer** used_buffer;
                 if (i == partition_id) {
@@ -2782,8 +2788,74 @@ public:
                         }
                         reducer += local_reducer;
                     }
+                    while (stealingss[partition_id] != 0) {
+                        // printf("stealings:%d\n", stealingss[partition_id]);
+                        __asm volatile("pause" ::: "memory");
+                    }
                 }
             }
+            // 全局工作窃取
+            //TODO: fix socket 
+            for (int step = 1; step < partitions; step++) {
+                int i = (partition_id - step + partitions) % partitions;
+                // 怎么判断这个节点需不需要工作窃取
+                __sync_fetch_and_add(&stealingss[i], 1);
+                //  stealings[i]++;
+#pragma omp parallel reduction(+ : reducer)
+                {
+                    R local_reducer = 0;
+                    int thread_id = omp_get_thread_num();
+
+                    for (int t_offset = 0; t_offset < threads; t_offset++) {
+                        int t_i = (thread_id + t_offset) % threads;
+                        if (gim_thread_state[i][t_i]->status == STEALING) continue;
+                        while (true) {
+                            VertexId b_i =
+                                __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr, basic_chunk);
+                            if (b_i >= gim_thread_state[i][t_i]->end) break;
+                            VertexId begin_b_i = b_i;
+                            VertexId end_b_i = b_i + basic_chunk;
+                            if (end_b_i > gim_thread_state[i][t_i]->end) {
+                                end_b_i = gim_thread_state[i][t_i]->end;
+                            }
+                            int s_i = get_socket_id(t_i);
+                            for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+                                // VertexId v_i = buffer[b_i].vertex;
+                                // M msg_data = buffer[b_i].msg_data;
+                                MsgUnit<M>* buffer; if (global_current_send_part_id[i] == i) {
+                                     buffer = (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
+                                }
+                                else {
+                                     buffer =
+                                        (MsgUnit<M>*)
+                                            gim_recv_buffer[i][global_current_send_part_id[i]][0]
+                                                ->data;
+                                }
+                                VertexId v_i = buffer[b_i].vertex;
+                                M msg_data = buffer[b_i].msg_data;
+                                if (gim_outgoing_adj_bitmap[i][s_i]->get_bit(v_i)) {
+                                    local_reducer += sparse_slot(
+                                        v_i,
+                                        msg_data,
+                                        VertexAdjList<
+                                            EdgeData>(   // 这里只是两个指针，具体数据是存放邻居的数组
+                                            gim_outgoing_adj_list[i][s_i] +
+                                                gim_outgoing_adj_index[i][s_i][v_i],
+                                            gim_outgoing_adj_list[i][s_i] +
+                                                gim_outgoing_adj_index[i][s_i][v_i + 1]),
+                                        i);
+                                }
+                            }
+                        }
+                    }
+                    reducer += local_reducer;
+                }
+                
+                // stealings[i]--;
+                __sync_fetch_and_add(&stealingss[i], -1);
+            }
+
+
             send_thread.join();
             recv_thread.join();
             process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
@@ -3018,8 +3090,8 @@ public:
                     flush_local_send_buffer<M>(t_i);
                 }
                 // 确保其他节点窃取的任务完成
-                while (stealings[partition_id].load() != 0) {
-                    // printf("stealings:%d\n",stealings[partition_id].load());
+                while (stealingss[partition_id] != 0) {
+                    printf("stealings:%d\n", stealingss[partition_id]);
                     __asm volatile("pause" ::: "memory");
                 }
                 // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
@@ -3031,53 +3103,56 @@ public:
                 }
             }
             // 全局工作窃取
-            for (int step = 1; step < partitions; step++) {
-                int i = (partition_id - step + partitions) % partitions;
-                // 怎么判断这个节点需不需要工作窃取
-                if (global_current_send_part_id[i] == i) {
-                    continue;
-                }
-                stealings[i]++;
-#pragma omp parallel
-                {
-                    int thread_id = omp_get_thread_num();
-                    int s_i = get_socket_id(thread_id);
+            //             for (int step = 1; step < partitions; step++) {
+            //                 int i = (partition_id - step + partitions) % partitions;
+            //                 // 怎么判断这个节点需不需要工作窃取
+            //                 if (global_current_send_part_id[i] == i) {
+            //                     continue;
+            //                 }
+            //                 __sync_fetch_and_add(&stealingss[i],1);
+            //                 //  stealings[i]++;
+            // #pragma omp parallel
+            //                 {
+            //                     int thread_id = omp_get_thread_num();
 
-                    for (int t_offset = 0; t_offset < threads; t_offset++) {
-                        int t_i = (thread_id + t_offset) % threads;
-                        int s_i = get_socket_id(t_i);
-                        while (gim_thread_state[i][t_i]->status != STEALING) {
-                            VertexId begin_p_v_i =
-                                __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr, basic_chunk);
-                            if (begin_p_v_i >= gim_thread_state[i][t_i]->end) break;
-                            VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                            if (end_p_v_i > gim_thread_state[i][t_i]->end) {
-                                end_p_v_i = gim_thread_state[i][t_i]->end;
-                            }
-                            for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-                                VertexId v_i =
-                                    gim_compressed_incoming_adj_index[i][s_i][p_v_i].vertex;
-                                dense_signal(
-                                    v_i,
-                                    VertexAdjList<EdgeData>(
-                                        gim_incoming_adj_list[i][s_i] +
-                                            gim_compressed_incoming_adj_index[i][s_i][p_v_i]
-                                                .index,   // s_i出边开始
-                                        gim_incoming_adj_list[i][s_i] +
-                                            gim_compressed_incoming_adj_index[i][s_i]
-                                                                             [p_v_i + 1]   //
-                                            s_i出边结束.index),
-                                    i);
-                            }
-                        }
-                    }
-                }
-#pragma omp parallel for
-                for (int t_i = 0; t_i < threads; t_i++) {
-                    flush_local_send_buffer_to_other<M>(t_i, i);
-                }
-                stealings[i]--;
-            }
+            //                     for (int t_offset = 0; t_offset < threads; t_offset++) {
+            //                         int t_i = (thread_id + t_offset) % threads;
+            //                         int s_i = get_socket_id(t_i);
+            //                         while (gim_thread_state[i][t_i]->status != STEALING) {
+            //                             VertexId begin_p_v_i =
+            //                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
+            //                                 basic_chunk);
+            //                             if (begin_p_v_i >= gim_thread_state[i][t_i]->end) break;
+            //                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
+            //                             if (end_p_v_i > gim_thread_state[i][t_i]->end) {
+            //                                 end_p_v_i = gim_thread_state[i][t_i]->end;
+            //                             }
+            //                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i;
+            //                             p_v_i++) {
+            //                                 VertexId v_i =
+            //                                     gim_compressed_incoming_adj_index[i][s_i][p_v_i].vertex;
+            //                                 dense_signal(
+            //                                     v_i,
+            //                                     VertexAdjList<EdgeData>(
+            //                                         gim_incoming_adj_list[i][s_i] +
+            //                                             gim_compressed_incoming_adj_index[i][s_i][p_v_i]
+            //                                                 .index,   // s_i出边开始
+            //                                         gim_incoming_adj_list[i][s_i] +
+            //                                             gim_compressed_incoming_adj_index[i][s_i]
+            //                                                                              [p_v_i +
+            //                                                                              1].index),
+            //                                     i);
+            //                             }
+            //                         }
+            //                     }
+            //                 }
+            // #pragma omp parallel for
+            //                 for (int t_i = 0; t_i < threads; t_i++) {
+            //                     flush_local_send_buffer_to_other<M>(t_i, i);
+            //                 }
+            //                 // stealings[i]--;
+            //                 __sync_fetch_and_add(&stealingss[i], -1);
+            //             }
 
 
             process_edge_time[2] = MPI_Wtime() + stream_time;
