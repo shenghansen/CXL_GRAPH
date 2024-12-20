@@ -112,23 +112,26 @@ void compute(Graph<Empty> * graph, VertexId root) {
             },
             active_in,
             visited);
+#ifndef GLOBAL_STEALING_VERTICES
         active_vertices = graph->process_vertices<VertexId>(   //用来标记点访问过了
             [&](VertexId vtx) {
                 visited->set_bit(vtx);
                 return 1;
             },
             active_out);
-        // active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
-        //     [&](VertexId vtx,int partition_id) {
-        //         if(partition_id==-1){
-        //         visited->set_bit(vtx);
-        //         return 1;}
-        //         else{
-        //             global_visited[partition_id]->set_bit(vtx);
-        //             return 1;
-        //         }
-        //     },
-        //     global_active_out);
+            #else
+        active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
+            [&](VertexId vtx,int partition_id) {
+                if(partition_id==-1){
+                visited->set_bit(vtx);
+                return 1;}
+                else{
+                    global_visited[partition_id]->set_bit(vtx);
+                    return 1;
+                }
+            },
+            global_active_out);
+        #endif
         std::swap(active_in, active_out);
         std::swap(global_active_in, global_active_out);
     }

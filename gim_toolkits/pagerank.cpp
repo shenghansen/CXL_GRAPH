@@ -41,15 +41,17 @@ void compute(Graph<Empty>* graph, int iterations) {
     active->fill();   //处理所有点
     
     //当前PR值除以出度
-    // double delta = graph->process_vertices<double>(
-    //     [&](VertexId vtx) {
-    //         curr[vtx] = (double)1;
-    //         if (graph->out_degree[vtx] > 0) {
-    //             curr[vtx] /= graph->out_degree[vtx];
-    //         }
-    //         return (double)1;
-    //     },
-    //     active);
+#ifndef GLOBAL_STEALING_VERTICES
+    double delta = graph->process_vertices<double>(
+        [&](VertexId vtx) {
+            curr[vtx] = (double)1;
+            if (graph->out_degree[vtx] > 0) {
+                curr[vtx] /= graph->out_degree[vtx];
+            }
+            return (double)1;
+        },
+        active);
+        #else
     double delta = graph->process_vertices_global<double>(
         [&](VertexId vtx,int partition_id) {
             if(partition_id==-1){
@@ -67,6 +69,7 @@ void compute(Graph<Empty>* graph, int iterations) {
             }
         },
         global_active);
+        #endif
     delta /= graph->vertices;
     for (int i_i = 0; i_i < iterations; i_i++) {
         if (graph->partition_id==0) {
@@ -105,12 +108,14 @@ void compute(Graph<Empty>* graph, int iterations) {
             },
             active);
         if (i_i == iterations - 1) {
-            // delta = graph->process_vertices<double>(
-            //     [&](VertexId vtx) {
-            //         next[vtx] = 1 - d + d * next[vtx];
-            //         return 0;
-            //     },
-            //     active);
+#ifndef GLOBAL_STEALING_VERTICES
+            delta = graph->process_vertices<double>(
+                [&](VertexId vtx) {
+                    next[vtx] = 1 - d + d * next[vtx];
+                    return 0;
+                },
+                active);
+                #else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
                     if(partition_id==-1){
@@ -122,17 +127,20 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return 0;
                 },
                 global_active);
+                #endif
         } else {
-            // delta = graph->process_vertices<double>(
-            //     [&](VertexId vtx) {
-            //         next[vtx] = 1 - d + d * next[vtx];
-            //         if (graph->out_degree[vtx] > 0) {
-            //             next[vtx] /= graph->out_degree[vtx];
-            //             return fabs(next[vtx] - curr[vtx]) * graph->out_degree[vtx];
-            //         }
-            //         return fabs(next[vtx] - curr[vtx]);
-            //     },
-            //     active);
+#ifndef GLOBAL_STEALING_VERTICES
+            delta = graph->process_vertices<double>(
+                [&](VertexId vtx) {
+                    next[vtx] = 1 - d + d * next[vtx];
+                    if (graph->out_degree[vtx] > 0) {
+                        next[vtx] /= graph->out_degree[vtx];
+                        return fabs(next[vtx] - curr[vtx]) * graph->out_degree[vtx];
+                    }
+                    return fabs(next[vtx] - curr[vtx]);
+                },
+                active);
+                #else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
                     if(partition_id==-1){
@@ -157,6 +165,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     
                 },
                 global_active);
+                #endif
         }
         delta /= graph->vertices;
         std::swap(curr, next);
@@ -168,14 +177,17 @@ void compute(Graph<Empty>* graph, int iterations) {
     //   printf("exec_time=%lf(s)\n", exec_time);
     // }
     printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
-    // double pr_sum =
-    //     graph->process_vertices<double>([&](VertexId vtx) { return curr[vtx]; }, active);
+#ifndef GLOBAL_STEALING_VERTICES
+    double pr_sum =
+        graph->process_vertices<double>([&](VertexId vtx) { return curr[vtx]; }, active);
+        #else
     double pr_sum = graph->process_vertices_global<double>(
         [&](VertexId vtx, int partition_id) { if(partition_id==-1){
             return curr[vtx];
         }else{
             return global_curr[partition_id][vtx];
         } }, global_active);
+        #endif
     if (graph->partition_id == 0) {
         printf("pr_sum=%lf\n", pr_sum);
     }

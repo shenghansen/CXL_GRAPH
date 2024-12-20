@@ -9,6 +9,9 @@ find_package(MPI REQUIRED)
 add_subdirectory("Gimulator")
 
 add_definitions(-DSTATISTICS)
+add_definitions(-DGLOBAL_STEALING_SPRASE)
+# add_definitions(-DGLOBAL_STEALING_DENSE)
+# add_definitions(-DGLOBAL_STEALING_VERTICES)
 
 set(CMAKE_CXX_FLAGS " -w -fsanitize=address -fno-sanitize=leak  -std=c++17 -g -fopenmp -march=native")
 set(TARGETS bc bfs cc pagerank sssp )
