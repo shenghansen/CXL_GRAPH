@@ -28,16 +28,17 @@ void compute(Graph<Empty> * graph, VertexId root) {
     // VertexSubset* visited = graph->alloc_vertex_subset();
     // VertexSubset* active_in = graph->alloc_vertex_subset();
     // VertexSubset* active_out = graph->alloc_vertex_subset();
+    VertexId** global_parent = graph->alloc_global_vertex_array<VertexId>();
     VertexSubset** global_visited = graph->alloc_global_vertex_subset();
     VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
     VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
+
     MPI_Barrier(MPI_COMM_WORLD);
     VertexSubset* visited = global_visited[graph->partition_id];
     VertexSubset* active_in = global_active_in[graph->partition_id];
     VertexSubset* active_out = global_active_out[graph->partition_id];
-    VertexId** global_parent = graph->alloc_global_vertex_array<VertexId>();
     VertexId* parent = global_parent[graph->partition_id];
-
+    MPI_Barrier(MPI_COMM_WORLD);
 
 
     visited->clear();
@@ -135,7 +136,6 @@ void compute(Graph<Empty> * graph, VertexId root) {
         std::swap(active_in, active_out);
         std::swap(global_active_in, global_active_out);
     }
-
   exec_time += get_time();
   // if (graph->partition_id==0) {
   //   printf("exec_time=%lf(s)\n", exec_time);

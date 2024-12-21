@@ -1,0 +1,2078 @@
+nohup: ignoring input
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/pagerank ../../data/twitter-2010Bin 41652230 1
+nodestring:3
+nodestring:2
+nodestring:0
+nodestring:1
+delta(0)=1.000000
+total size: 4.68 GB
+outgoing_adj_list size: 1.23 GB , percentage : 26.229193%
+recv_buffer size: 826.50 MB , percentage : 17.258674%
+incoming_adj_list size: 700.28 MB , percentage : 14.623068%
+send_buffer size: 476.67 MB , percentage : 9.953691%
+compressed_outgoing_adj_index size: 391.66 MB , percentage : 8.178593%
+outgoing_adj_index size: 317.78 MB , percentage : 6.635794%
+incoming_adj_index size: 317.78 MB , percentage : 6.635794%
+compressed_incoming_adj_index size: 174.03 MB , percentage : 3.634129%
+in_degree size: 158.89 MB , percentage : 3.317897%
+out_degree size: 158.89 MB , percentage : 3.317897%
+incoming_adj_bitmap size: 4.97 MB , percentage : 0.103684%
+outgoing_adj_bitmap size: 4.97 MB , percentage : 0.103684%
+local_send_buffer size: 384.00 KB , percentage : 0.007831%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000031%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000031%
+thread_state size: 384 B , percentage : 0.000008%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 65.936572 %
+partition: 1,exec_time=0.387085(s)
+partition: 3,exec_time=0.333461(s)
+partition: 0,exec_time=0.281155(s)
+partition: 2,exec_time=0.348208(s)
+pr_sum=40335623.350048
+partiton_id: 1, total_process_time  =0.270374(s)
+partiton_id: 2, total_process_time  =0.268211(s)
+partiton_id: 3, total_process_time  =0.186126(s)
+pr[21496201]=48361.439600
+partiton_id: 0, total_process_time  =0.251336(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/pagerank ../../data/enwiki-2013in 4206785 1
+nodestring:2
+nodestring:0
+nodestring:1
+nodestring:3
+delta(0)=1.000000
+total size: 464.65 MB
+outgoing_adj_list size: 114.45 MB , percentage : 24.631859%
+incoming_adj_list size: 104.18 MB , percentage : 22.421912%
+send_buffer size: 48.14 MB , percentage : 10.361084%
+recv_buffer size: 44.25 MB , percentage : 9.523286%
+compressed_outgoing_adj_index size: 33.59 MB , percentage : 7.228168%
+outgoing_adj_index size: 32.10 MB , percentage : 6.907391%
+incoming_adj_index size: 32.10 MB , percentage : 6.907391%
+compressed_incoming_adj_index size: 22.37 MB , percentage : 4.814234%
+in_degree size: 16.05 MB , percentage : 3.453695%
+out_degree size: 16.05 MB , percentage : 3.453695%
+incoming_adj_bitmap size: 513.53 KB , percentage : 0.107930%
+outgoing_adj_bitmap size: 513.53 KB , percentage : 0.107930%
+local_send_buffer size: 384.00 KB , percentage : 0.080706%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000315%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000315%
+thread_state size: 384 B , percentage : 0.000079%
+partition_offset size: 20 B , percentage : 0.000004%
+incoming_edges size: 8 B , percentage : 0.000002%
+local_partition_offset size: 8 B , percentage : 0.000002%
+outgoing_edges size: 8 B , percentage : 0.000002%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000001%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000001%
+remote memory percentage: 72.910955 %
+partition: 0,exec_time=0.028796(s)
+partition: 2,exec_time=0.030635(s)
+partition: 3,exec_time=0.031786(s)
+partition: 1,exec_time=0.028781(s)
+pr_sum=4200089.550000
+partiton_id: 1, total_process_time  =0.019119(s)
+partiton_id: 2, total_process_time  =0.024419(s)
+partiton_id: 3, total_process_time  =0.027077(s)
+pr[2038044]=21562.818575
+partiton_id: 0, total_process_time  =0.026281(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/pagerank ../../data/uk-2007Bin 105896555 1
+nodestring:2
+nodestring:3
+nodestring:0
+nodestring:1
+delta(0)=1.000000
+total size: 12.20 GB
+incoming_adj_list size: 3.41 GB , percentage : 27.920169%
+outgoing_adj_list size: 3.40 GB , percentage : 27.846167%
+recv_buffer size: 1.22 GB , percentage : 10.009444%
+send_buffer size: 1.18 GB , percentage : 9.700880%
+outgoing_adj_index size: 807.93 MB , percentage : 6.467254%
+incoming_adj_index size: 807.93 MB , percentage : 6.467254%
+in_degree size: 403.96 MB , percentage : 3.233627%
+out_degree size: 403.96 MB , percentage : 3.233627%
+compressed_outgoing_adj_index size: 314.73 MB , percentage : 2.519365%
+compressed_incoming_adj_index size: 299.46 MB , percentage : 2.397084%
+incoming_adj_bitmap size: 12.62 MB , percentage : 0.101051%
+outgoing_adj_bitmap size: 12.62 MB , percentage : 0.101051%
+local_send_buffer size: 384.00 KB , percentage : 0.003002%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000012%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000012%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 73.617291 %
+partition: 2,exec_time=0.250143(s)
+partition: 0,exec_time=0.092276(s)
+partition: 3,exec_time=0.308823(s)
+partition: 1,exec_time=0.139957(s)
+pr_sum=94889333.800104
+partiton_id: 1, total_process_time  =0.069800(s)
+partiton_id: 2, total_process_time  =0.068332(s)
+partiton_id: 3, total_process_time  =0.068415(s)
+pr[94274478]=56942.387788
+partiton_id: 0, total_process_time  =0.066692(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/pagerank ../../data/rMat24Bin 16800000 1
+nodestring:3
+nodestring:0
+nodestring:2
+nodestring:1
+delta(0)=1.000000
+total size: 1.19 GB
+send_buffer size: 192.26 MB , percentage : 15.715307%
+recv_buffer size: 173.62 MB , percentage : 14.192030%
+incoming_adj_list size: 131.44 MB , percentage : 10.744203%
+outgoing_adj_list size: 130.80 MB , percentage : 10.691557%
+outgoing_adj_index size: 128.17 MB , percentage : 10.476872%
+incoming_adj_index size: 128.17 MB , percentage : 10.476872%
+compressed_incoming_adj_index size: 103.50 MB , percentage : 8.459840%
+compressed_outgoing_adj_index size: 102.86 MB , percentage : 8.408119%
+in_degree size: 64.09 MB , percentage : 5.238436%
+out_degree size: 64.09 MB , percentage : 5.238436%
+incoming_adj_bitmap size: 2.00 MB , percentage : 0.163702%
+outgoing_adj_bitmap size: 2.00 MB , percentage : 0.163702%
+local_send_buffer size: 384.00 KB , percentage : 0.030652%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000120%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000120%
+thread_state size: 384 B , percentage : 0.000030%
+partition_offset size: 20 B , percentage : 0.000002%
+incoming_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 59.257463 %
+partition: 3,exec_time=0.140359(s)
+partition: 2,exec_time=0.121281(s)
+partition: 1,exec_time=0.108825(s)
+partition: 0,exec_time=0.101702(s)
+pr_sum=15255502.399998
+partiton_id: 1, total_process_time  =0.087450(s)
+partiton_id: 2, total_process_time  =0.091688(s)
+partiton_id: 3, total_process_time  =0.096664(s)
+pr[1]=37.874065
+partiton_id: 0, total_process_time  =0.095204(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/pagerank ../../data/rMat27Bin 134000000 1
+nodestring:0
+nodestring:2
+nodestring:3
+nodestring:1
+delta(0)=1.000000
+total size: 13.10 GB
+incoming_adj_list size: 3.47 GB , percentage : 26.468024%
+outgoing_adj_list size: 3.46 GB , percentage : 26.426733%
+send_buffer size: 1.50 GB , percentage : 11.429323%
+outgoing_adj_index size: 1022.34 MB , percentage : 7.619549%
+incoming_adj_index size: 1022.34 MB , percentage : 7.619549%
+recv_buffer size: 766.69 MB , percentage : 5.714165%
+in_degree size: 511.17 MB , percentage : 3.809774%
+out_degree size: 511.17 MB , percentage : 3.809774%
+compressed_incoming_adj_index size: 460.89 MB , percentage : 3.435062%
+compressed_outgoing_adj_index size: 459.83 MB , percentage : 3.427117%
+incoming_adj_bitmap size: 15.97 MB , percentage : 0.119056%
+outgoing_adj_bitmap size: 15.97 MB , percentage : 0.119056%
+local_send_buffer size: 384.00 KB , percentage : 0.002795%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000011%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000011%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 74.996033 %
+partition: 2,exec_time=0.618131(s)
+partition: 0,exec_time=0.426535(s)
+partition: 3,exec_time=0.756408(s)
+partition: 1,exec_time=0.537920(s)
+pr_sum=64171428.149985
+partiton_id: 1, total_process_time  =0.324922(s)
+partiton_id: 2, total_process_time  =0.341305(s)
+partiton_id: 3, total_process_time  =0.397645(s)
+pr[0]=28154.758384
+partiton_id: 0, total_process_time  =0.399938(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bfs ../../data/twitter-2010Bin 41652230 1
+nodestring:1
+nodestring:2
+nodestring:3
+nodestring:0
+load complete
+load complete
+load complete
+load complete
+active(0)>=1
+total size: 4.39 GB
+outgoing_adj_list size: 1.23 GB , percentage : 27.961984%
+incoming_adj_list size: 700.28 MB , percentage : 15.589118%
+send_buffer size: 688.75 MB , percentage : 15.332368%
+compressed_outgoing_adj_index size: 391.66 MB , percentage : 8.718899%
+outgoing_adj_index size: 317.78 MB , percentage : 7.074178%
+incoming_adj_index size: 317.78 MB , percentage : 7.074178%
+recv_buffer size: 317.78 MB , percentage : 7.074177%
+compressed_incoming_adj_index size: 174.03 MB , percentage : 3.874212%
+in_degree size: 158.89 MB , percentage : 3.537089%
+out_degree size: 158.89 MB , percentage : 3.537089%
+incoming_adj_bitmap size: 4.97 MB , percentage : 0.110534%
+outgoing_adj_bitmap size: 4.97 MB , percentage : 0.110534%
+local_send_buffer size: 256.00 KB , percentage : 0.005565%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000033%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000033%
+thread_state size: 384 B , percentage : 0.000008%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 70.292570 %
+active(1)>=1
+active(2)>=1
+active(3)>=38
+active(4)>=2490
+active(5)>=3316274
+active(6)>=21796563
+active(7)>=8718595
+active(8)>=1066115
+active(9)>=104226
+active(10)>=10512
+active(11)>=1145
+active(12)>=144
+active(13)>=25
+active(14)>=6
+active(15)>=2
+active(16)>=1
+partition: 3,exec_time=0.387499(s)
+partition: 1,exec_time=0.443252(s)
+partition: 0,exec_time=0.337971(s)
+partition: 2,exec_time=0.404824(s)
+partiton_id: 1, total_process_time  =0.403455(s)
+partiton_id: 2, total_process_time  =0.341563(s)
+partiton_id: 3, total_process_time  =0.303518(s)
+found_vertices = 35016139
+partiton_id: 0, total_process_time  =0.308786(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bfs ../../data/enwiki-2013in 4206785 1
+nodestring:3
+nodestring:2
+nodestring:0
+nodestring:1
+load complete
+load complete
+load complete
+load complete
+active(0)>=1
+total size: 441.10 MB
+outgoing_adj_list size: 114.45 MB , percentage : 25.946793%
+incoming_adj_list size: 104.18 MB , percentage : 23.618871%
+send_buffer size: 36.88 MB , percentage : 8.359727%
+compressed_outgoing_adj_index size: 33.59 MB , percentage : 7.614033%
+outgoing_adj_index size: 32.10 MB , percentage : 7.276132%
+incoming_adj_index size: 32.10 MB , percentage : 7.276132%
+recv_buffer size: 32.10 MB , percentage : 7.276130%
+compressed_incoming_adj_index size: 22.37 MB , percentage : 5.071235%
+in_degree size: 16.05 MB , percentage : 3.638065%
+out_degree size: 16.05 MB , percentage : 3.638065%
+incoming_adj_bitmap size: 513.53 KB , percentage : 0.113691%
+outgoing_adj_bitmap size: 513.53 KB , percentage : 0.113691%
+local_send_buffer size: 256.00 KB , percentage : 0.056676%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000332%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000332%
+thread_state size: 384 B , percentage : 0.000083%
+partition_offset size: 20 B , percentage : 0.000004%
+incoming_edges size: 8 B , percentage : 0.000002%
+local_partition_offset size: 8 B , percentage : 0.000002%
+outgoing_edges size: 8 B , percentage : 0.000002%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000001%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000001%
+remote memory percentage: 76.803196 %
+active(1)>=2
+active(2)>=8
+active(3)>=557
+active(4)>=31656
+active(5)>=620492
+active(6)>=1941317
+active(7)>=936392
+active(8)>=184285
+active(9)>=28015
+active(10)>=3258
+active(11)>=874
+active(12)>=355
+active(13)>=254
+active(14)>=148
+active(15)>=115
+active(16)>=106
+active(17)>=66
+active(18)>=57
+active(19)>=57
+active(20)>=63
+active(21)>=58
+active(22)>=46
+active(23)>=38
+active(24)>=32
+active(25)>=27
+active(26)>=20
+active(27)>=19
+active(28)>=14
+active(29)>=15
+active(30)>=12
+active(31)>=13
+active(32)>=11
+active(33)>=9
+active(34)>=8
+active(35)>=6
+active(36)>=6
+active(37)>=6
+active(38)>=7
+active(39)>=8
+active(40)>=6
+active(41)>=4
+active(42)>=4
+active(43)>=4
+active(44)>=3
+active(45)>=2
+active(46)>=2
+active(47)>=2
+active(48)>=1
+active(49)>=1
+active(50)>=1
+active(51)>=1
+active(52)>=1
+partition: 3,exec_time=0.092847(s)
+partition: 1,exec_time=0.089875(s)
+partition: 2,exec_time=0.091630(s)
+partition: 0,exec_time=0.089740(s)
+partiton_id: 1, total_process_time  =0.081520(s)
+partiton_id: 2, total_process_time  =0.085245(s)
+partiton_id: 3, total_process_time  =0.083075(s)
+found_vertices = 3748465
+partiton_id: 0, total_process_time  =0.081549(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bfs ../../data/uk-2007Bin 105896555 1
+nodestring:3
+nodestring:2
+nodestring:1
+nodestring:0
+load complete
+load complete
+load complete
+load complete
+active(0)>=1
+total size: 11.60 GB
+incoming_adj_list size: 3.41 GB , percentage : 29.359633%
+outgoing_adj_list size: 3.40 GB , percentage : 29.281816%
+send_buffer size: 1.02 GB , percentage : 8.771246%
+outgoing_adj_index size: 807.93 MB , percentage : 6.800682%
+incoming_adj_index size: 807.93 MB , percentage : 6.800682%
+recv_buffer size: 807.93 MB , percentage : 6.800682%
+in_degree size: 403.96 MB , percentage : 3.400341%
+out_degree size: 403.96 MB , percentage : 3.400341%
+compressed_outgoing_adj_index size: 314.73 MB , percentage : 2.649254%
+compressed_incoming_adj_index size: 299.46 MB , percentage : 2.520669%
+incoming_adj_bitmap size: 12.62 MB , percentage : 0.106261%
+outgoing_adj_bitmap size: 12.62 MB , percentage : 0.106261%
+local_send_buffer size: 256.00 KB , percentage : 0.002104%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000012%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000012%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 77.412736 %
+active(1)>=5
+active(2)>=11
+active(3)>=261
+active(4)>=1664
+active(5)>=5390
+active(6)>=48352
+active(7)>=280149
+active(8)>=984412
+active(9)>=3111692
+active(10)>=7484395
+active(11)>=12577761
+active(12)>=15371217
+active(13)>=15478808
+active(14)>=12220612
+active(15)>=9424784
+active(16)>=6038525
+active(17)>=3919965
+active(18)>=2690087
+active(19)>=1868003
+active(20)>=1366990
+active(21)>=981533
+active(22)>=736931
+active(23)>=486772
+active(24)>=334492
+active(25)>=231497
+active(26)>=142813
+active(27)>=86822
+active(28)>=43712
+active(29)>=22341
+active(30)>=15069
+active(31)>=10570
+active(32)>=6487
+active(33)>=6167
+active(34)>=5132
+active(35)>=3534
+active(36)>=568
+active(37)>=471
+active(38)>=398
+active(39)>=401
+active(40)>=378
+active(41)>=347
+active(42)>=327
+active(43)>=274
+active(44)>=274
+active(45)>=279
+active(46)>=269
+active(47)>=278
+active(48)>=264
+active(49)>=256
+active(50)>=254
+active(51)>=253
+active(52)>=254
+active(53)>=252
+active(54)>=253
+active(55)>=249
+active(56)>=249
+active(57)>=248
+active(58)>=248
+active(59)>=248
+active(60)>=247
+active(61)>=249
+active(62)>=248
+active(63)>=248
+active(64)>=248
+active(65)>=248
+active(66)>=248
+active(67)>=248
+active(68)>=248
+active(69)>=248
+active(70)>=248
+active(71)>=246
+active(72)>=237
+active(73)>=228
+active(74)>=220
+active(75)>=217
+active(76)>=217
+active(77)>=217
+active(78)>=217
+active(79)>=217
+active(80)>=217
+active(81)>=217
+active(82)>=216
+active(83)>=208
+active(84)>=188
+active(85)>=172
+active(86)>=161
+active(87)>=157
+active(88)>=157
+active(89)>=129
+active(90)>=128
+active(91)>=126
+active(92)>=126
+active(93)>=126
+active(94)>=125
+active(95)>=124
+active(96)>=123
+active(97)>=125
+active(98)>=124
+active(99)>=124
+active(100)>=123
+active(101)>=92
+active(102)>=82
+active(103)>=70
+active(104)>=63
+active(105)>=62
+active(106)>=62
+active(107)>=62
+active(108)>=59
+active(109)>=50
+active(110)>=38
+active(111)>=34
+active(112)>=31
+active(113)>=31
+active(114)>=31
+active(115)>=3
+active(116)>=1
+partition: 3,exec_time=0.866957(s)
+partition: 1,exec_time=0.696471(s)
+partition: 0,exec_time=0.647606(s)
+partition: 2,exec_time=0.807363(s)
+partiton_id: 1, total_process_time  =0.552415(s)
+partiton_id: 2, total_process_time  =0.639143(s)
+partiton_id: 3, total_process_time  =0.690724(s)
+found_vertices = 96002959
+partiton_id: 0, total_process_time  =0.509722(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bfs ../../data/rMat24Bin 16800000 1
+nodestring:2
+nodestring:0
+nodestring:1
+nodestring:3
+load complete
+load complete
+load complete
+load complete
+active(0)>=1
+total size: 1.10 GB
+send_buffer size: 144.69 MB , percentage : 12.801388%
+incoming_adj_list size: 131.44 MB , percentage : 11.629687%
+outgoing_adj_list size: 130.80 MB , percentage : 11.572702%
+outgoing_adj_index size: 128.17 MB , percentage : 11.340323%
+incoming_adj_index size: 128.17 MB , percentage : 11.340323%
+recv_buffer size: 128.17 MB , percentage : 11.340322%
+compressed_incoming_adj_index size: 103.50 MB , percentage : 9.157057%
+compressed_outgoing_adj_index size: 102.86 MB , percentage : 9.101074%
+in_degree size: 64.09 MB , percentage : 5.670161%
+out_degree size: 64.09 MB , percentage : 5.670161%
+incoming_adj_bitmap size: 2.00 MB , percentage : 0.177193%
+outgoing_adj_bitmap size: 2.00 MB , percentage : 0.177193%
+local_send_buffer size: 256.00 KB , percentage : 0.022119%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000130%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000130%
+thread_state size: 384 B , percentage : 0.000032%
+partition_offset size: 20 B , percentage : 0.000002%
+incoming_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 64.141166 %
+active(1)>=429
+active(2)>=9530
+active(3)>=175466
+active(4)>=2248913
+active(5)>=7877915
+active(6)>=4080363
+active(7)>=484098
+active(8)>=33466
+active(9)>=2161
+active(10)>=140
+active(11)>=16
+active(12)>=2
+partition: 3,exec_time=0.177693(s)
+partition: 1,exec_time=0.145477(s)
+partition: 2,exec_time=0.158225(s)
+partition: 0,exec_time=0.137149(s)
+partiton_id: 1, total_process_time  =0.126935(s)
+partiton_id: 2, total_process_time  =0.146697(s)
+partiton_id: 3, total_process_time  =0.167767(s)
+found_vertices = 14912500
+partiton_id: 0, total_process_time  =0.125393(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bfs ../../data/rMat27Bin 134000000 1
+nodestring:0
+nodestring:3
+nodestring:2
+nodestring:1
+load complete
+load complete
+load complete
+load complete
+active(0)>=1
+total size: 12.48 GB
+incoming_adj_list size: 3.47 GB , percentage : 27.791765%
+outgoing_adj_list size: 3.46 GB , percentage : 27.748408%
+outgoing_adj_index size: 1022.34 MB , percentage : 8.000624%
+incoming_adj_index size: 1022.34 MB , percentage : 8.000624%
+recv_buffer size: 1022.34 MB , percentage : 8.000624%
+send_buffer size: 638.91 MB , percentage : 4.999955%
+in_degree size: 511.17 MB , percentage : 4.000312%
+out_degree size: 511.17 MB , percentage : 4.000312%
+compressed_incoming_adj_index size: 460.89 MB , percentage : 3.606859%
+compressed_outgoing_adj_index size: 459.83 MB , percentage : 3.598517%
+incoming_adj_bitmap size: 15.97 MB , percentage : 0.125010%
+outgoing_adj_bitmap size: 15.97 MB , percentage : 0.125010%
+local_send_buffer size: 256.00 KB , percentage : 0.001956%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000011%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000011%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 78.746796 %
+active(1)>=320654
+active(2)>=34252481
+active(3)>=17050580
+active(4)>=200650
+active(5)>=1326
+active(6)>=4
+partition: 3,exec_time=1.328827(s)
+partition: 2,exec_time=1.160043(s)
+partition: 1,exec_time=1.016244(s)
+partition: 0,exec_time=0.796098(s)
+partiton_id: 1, total_process_time  =0.762611(s)
+partiton_id: 2, total_process_time  =0.937351(s)
+partiton_id: 3, total_process_time  =1.231383(s)
+found_vertices = 51825696
+partiton_id: 0, total_process_time  =0.690440(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/cc ../../data/twitter-2010Bin 41652230 1
+nodestring:1
+nodestring:0
+nodestring:3
+nodestring:2
+active(0)>=41652230
+total size: 1.81 GB
+recv_buffer size: 574.12 MB , percentage : 30.942892%
+outgoing_adj_index size: 317.78 MB , percentage : 17.127058%
+incoming_adj_index size: 317.78 MB , percentage : 17.127058%
+send_buffer size: 317.78 MB , percentage : 17.127058%
+out_degree size: 158.89 MB , percentage : 8.563529%
+in_degree size: 158.89 MB , percentage : 8.563529%
+outgoing_adj_bitmap size: 4.97 MB , percentage : 0.267611%
+incoming_adj_bitmap size: 4.97 MB , percentage : 0.267611%
+local_send_buffer size: 256.00 KB , percentage : 0.013474%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000079%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000079%
+thread_state size: 384 B , percentage : 0.000020%
+partition_offset size: 20 B , percentage : 0.000001%
+incoming_edges size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 34.254117 %
+active(1)>=57677368
+active(2)>=66479673
+active(3)>=55893086
+active(4)>=55457947
+active(5)>=20334143
+active(6)>=1390539
+active(7)>=32117
+active(8)>=1751
+active(9)>=202
+active(10)>=55
+active(11)>=28
+active(12)>=15
+active(13)>=9
+active(14)>=5
+active(15)>=3
+active(16)>=1
+partition: 3,exec_time=1.058150(s)
+partition: 2,exec_time=1.082581(s)
+partition: 0,exec_time=1.012191(s)
+partition: 1,exec_time=1.129768(s)
+partiton_id: 1, total_process_time  =0.942504(s)
+partiton_id: 2, total_process_time  =0.927419(s)
+partiton_id: 3, total_process_time  =0.858014(s)
+components = 1
+partiton_id: 0, total_process_time  =0.974665(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/cc ../../data/enwiki-2013in 4206785 1
+nodestring:0
+nodestring:2
+nodestring:3
+nodestring:1
+active(0)>=4206785
+total size: 156.64 MB
+outgoing_adj_index size: 32.10 MB , percentage : 20.490166%
+incoming_adj_index size: 32.10 MB , percentage : 20.490166%
+send_buffer size: 32.10 MB , percentage : 20.490161%
+recv_buffer size: 27.00 MB , percentage : 17.237280%
+out_degree size: 16.05 MB , percentage : 10.245080%
+in_degree size: 16.05 MB , percentage : 10.245080%
+outgoing_adj_bitmap size: 513.53 KB , percentage : 0.320164%
+incoming_adj_bitmap size: 513.53 KB , percentage : 0.320164%
+local_send_buffer size: 256.00 KB , percentage : 0.159604%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000935%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000935%
+thread_state size: 384 B , percentage : 0.000234%
+partition_offset size: 20 B , percentage : 0.000012%
+incoming_edges size: 8 B , percentage : 0.000005%
+outgoing_edges size: 8 B , percentage : 0.000005%
+local_partition_offset size: 8 B , percentage : 0.000005%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000002%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000002%
+remote memory percentage: 40.980331 %
+active(1)>=5735721
+active(2)>=7360484
+active(3)>=6539803
+active(4)>=4729728
+active(5)>=3452535
+active(6)>=122935
+active(7)>=303
+active(8)>=3
+partition: 2,exec_time=0.142086(s)
+partition: 0,exec_time=0.142821(s)
+partition: 3,exec_time=0.142774(s)
+partition: 1,exec_time=0.141628(s)
+partiton_id: 1, total_process_time  =0.131831(s)
+partiton_id: 2, total_process_time  =0.131110(s)
+partiton_id: 3, total_process_time  =0.135660(s)
+components = 3477
+partiton_id: 0, total_process_time  =0.127920(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/cc ../../data/uk-2007Bin 105896555 1
+nodestring:3
+nodestring:0
+nodestring:1
+nodestring:2
+active(0)>=105896555
+total size: 4.00 GB
+recv_buffer size: 842.62 MB , percentage : 20.552669%
+outgoing_adj_index size: 807.93 MB , percentage : 19.706332%
+incoming_adj_index size: 807.93 MB , percentage : 19.706332%
+send_buffer size: 807.93 MB , percentage : 19.706332%
+out_degree size: 403.96 MB , percentage : 9.853166%
+in_degree size: 403.96 MB , percentage : 9.853166%
+outgoing_adj_bitmap size: 12.62 MB , percentage : 0.307911%
+incoming_adj_bitmap size: 12.62 MB , percentage : 0.307911%
+local_send_buffer size: 256.00 KB , percentage : 0.006098%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000036%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000036%
+thread_state size: 384 B , percentage : 0.000009%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 39.412664 %
+active(1)>=91840539
+active(2)>=109341367
+active(3)>=102032804
+active(4)>=105371884
+active(5)>=82055815
+active(6)>=48964753
+active(7)>=18718459
+active(8)>=6805139
+active(9)>=2849362
+active(10)>=1318931
+active(11)>=544782
+active(12)>=211618
+active(13)>=105963
+active(14)>=59987
+active(15)>=37342
+active(16)>=27466
+active(17)>=18683
+active(18)>=10067
+active(19)>=2372
+active(20)>=1125
+active(21)>=462
+active(22)>=106
+active(23)>=65
+active(24)>=62
+active(25)>=60
+active(26)>=58
+active(27)>=56
+active(28)>=54
+active(29)>=52
+active(30)>=50
+active(31)>=48
+active(32)>=46
+active(33)>=44
+active(34)>=42
+active(35)>=40
+active(36)>=39
+active(37)>=38
+active(38)>=36
+active(39)>=34
+active(40)>=32
+active(41)>=30
+active(42)>=28
+active(43)>=26
+active(44)>=25
+active(45)>=24
+active(46)>=23
+active(47)>=22
+active(48)>=21
+active(49)>=20
+active(50)>=19
+active(51)>=18
+active(52)>=17
+active(53)>=16
+active(54)>=15
+active(55)>=14
+active(56)>=13
+active(57)>=12
+active(58)>=11
+active(59)>=10
+active(60)>=9
+active(61)>=8
+active(62)>=7
+active(63)>=6
+active(64)>=5
+active(65)>=5
+active(66)>=5
+active(67)>=5
+active(68)>=5
+active(69)>=5
+active(70)>=5
+active(71)>=5
+active(72)>=4
+active(73)>=3
+active(74)>=2
+active(75)>=1
+partition: 3,exec_time=1.074411(s)
+partition: 2,exec_time=1.045101(s)
+partition: 1,exec_time=0.977633(s)
+partition: 0,exec_time=0.949795(s)
+partiton_id: 1, total_process_time  =0.858036(s)
+partiton_id: 2, total_process_time  =0.841330(s)
+partiton_id: 3, total_process_time  =0.817278(s)
+components = 756936
+partiton_id: 0, total_process_time  =0.861959(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/cc ../../data/rMat24Bin 16800000 1
+nodestring:3
+nodestring:1
+nodestring:2
+nodestring:0
+active(0)>=16800000
+total size: 624.20 MB
+outgoing_adj_index size: 128.17 MB , percentage : 20.533962%
+incoming_adj_index size: 128.17 MB , percentage : 20.533962%
+send_buffer size: 128.17 MB , percentage : 20.533961%
+recv_buffer size: 107.25 MB , percentage : 17.181880%
+out_degree size: 64.09 MB , percentage : 10.266980%
+in_degree size: 64.09 MB , percentage : 10.266980%
+outgoing_adj_bitmap size: 2.00 MB , percentage : 0.320844%
+incoming_adj_bitmap size: 2.00 MB , percentage : 0.320844%
+local_send_buffer size: 256.00 KB , percentage : 0.040051%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000235%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000235%
+thread_state size: 384 B , percentage : 0.000059%
+partition_offset size: 20 B , percentage : 0.000003%
+incoming_edges size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000001%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000001%
+remote memory percentage: 41.067924 %
+active(1)>=20341200
+active(2)>=24500212
+active(3)>=24691578
+active(4)>=21333723
+active(5)>=7118075
+active(6)>=424020
+active(7)>=9894
+active(8)>=205
+active(9)>=2
+partition: 2,exec_time=0.431863(s)
+partition: 3,exec_time=0.442436(s)
+partition: 1,exec_time=0.426994(s)
+partition: 0,exec_time=0.426381(s)
+partiton_id: 1, total_process_time  =0.392367(s)
+partiton_id: 2, total_process_time  =0.391944(s)
+partiton_id: 3, total_process_time  =0.418316(s)
+components = 647153
+partiton_id: 0, total_process_time  =0.409377(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/cc ../../data/rMat27Bin 134000000 1
+nodestring:3
+nodestring:0
+nodestring:2
+nodestring:1
+active(0)>=134000000
+total size: 4.31 GB
+outgoing_adj_index size: 1022.34 MB , percentage : 23.171480%
+incoming_adj_index size: 1022.34 MB , percentage : 23.171480%
+send_buffer size: 1022.34 MB , percentage : 23.171479%
+out_degree size: 511.17 MB , percentage : 11.585740%
+in_degree size: 511.17 MB , percentage : 11.585740%
+recv_buffer size: 290.50 MB , percentage : 6.584231%
+outgoing_adj_bitmap size: 15.97 MB , percentage : 0.362055%
+incoming_adj_bitmap size: 15.97 MB , percentage : 0.362055%
+local_send_buffer size: 256.00 KB , percentage : 0.005666%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000033%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000033%
+thread_state size: 384 B , percentage : 0.000008%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 46.342959 %
+active(1)>=86066646
+active(2)>=69555224
+active(3)>=9381338
+active(4)>=44835
+active(5)>=162
+partition: 0,exec_time=0.950468(s)
+partition: 3,exec_time=1.095843(s)
+partition: 2,exec_time=1.038058(s)
+partition: 1,exec_time=0.995829(s)
+partiton_id: 1, total_process_time  =0.780268(s)
+partiton_id: 2, total_process_time  =0.767909(s)
+partiton_id: 3, total_process_time  =0.927128(s)
+components = 71025317
+partiton_id: 0, total_process_time  =0.901238(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/sssp ../../data/twitter-2010Bin 41652230 1
+nodestring:0
+nodestring:2
+nodestring:1
+nodestring:3
+active(0)>=1
+partition: 3,exec_time=0.085269(s)
+partition: 1,exec_time=0.122840(s)
+total size: 4.50 GB
+incoming_adj_list size: 1.05 GB , percentage : 23.291607%
+outgoing_adj_list size: 1.05 GB , percentage : 23.290758%
+send_buffer size: 562.66 MB , percentage : 12.220075%
+outgoing_adj_index size: 317.78 MB , percentage : 6.901748%
+incoming_adj_index size: 317.78 MB , percentage : 6.901748%
+recv_buffer size: 317.78 MB , percentage : 6.901748%
+compressed_outgoing_adj_index size: 308.32 MB , percentage : 6.696365%
+compressed_incoming_adj_index size: 307.25 MB , percentage : 6.673021%
+in_degree size: 158.89 MB , percentage : 3.450874%
+out_degree size: 158.89 MB , percentage : 3.450874%
+incoming_adj_bitmap size: 4.97 MB , percentage : 0.107840%
+outgoing_adj_bitmap size: 4.97 MB , percentage : 0.107840%
+local_send_buffer size: 256.00 KB , percentage : 0.005430%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000032%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000032%
+thread_state size: 384 B , percentage : 0.000008%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+partition: 2,exec_time=0.058501(s)
+remote memory percentage: 73.755247 %
+partition: 0,exec_time=0.007053(s)
+partiton_id: 1, total_process_time  =0.116968(s)
+partiton_id: 2, total_process_time  =0.052950(s)
+partiton_id: 3, total_process_time  =0.078982(s)
+distance[1]=0.000000
+partiton_id: 0, total_process_time  =0.000321(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/sssp ../../data/enwiki-2013in 4206785 1
+nodestring:0
+nodestring:3
+nodestring:1
+nodestring:2
+active(0)>=1
+partition: 3,exec_time=0.004066(s)
+partition: 1,exec_time=0.001318(s)
+partition: 2,exec_time=0.002383(s)
+total size: 514.87 MB
+outgoing_adj_list size: 145.10 MB , percentage : 28.182168%
+incoming_adj_list size: 145.09 MB , percentage : 28.180821%
+send_buffer size: 36.56 MB , percentage : 7.101341%
+outgoing_adj_index size: 32.10 MB , percentage : 6.233687%
+incoming_adj_index size: 32.10 MB , percentage : 6.233687%
+recv_buffer size: 32.10 MB , percentage : 6.233686%
+compressed_outgoing_adj_index size: 29.25 MB , percentage : 5.681093%
+compressed_incoming_adj_index size: 29.22 MB , percentage : 5.675821%
+in_degree size: 16.05 MB , percentage : 3.116843%
+out_degree size: 16.05 MB , percentage : 3.116843%
+incoming_adj_bitmap size: 513.53 KB , percentage : 0.097403%
+outgoing_adj_bitmap size: 513.53 KB , percentage : 0.097403%
+local_send_buffer size: 256.00 KB , percentage : 0.048556%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000285%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000285%
+thread_state size: 384 B , percentage : 0.000071%
+partition_offset size: 20 B , percentage : 0.000004%
+incoming_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000001%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000001%
+remote memory percentage: 80.187276 %
+partition: 0,exec_time=0.000934(s)
+partiton_id: 1, total_process_time  =0.000794(s)
+partiton_id: 2, total_process_time  =0.001703(s)
+partiton_id: 3, total_process_time  =0.003444(s)
+distance[1]=0.000000
+partiton_id: 0, total_process_time  =0.000314(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/sssp ../../data/uk-2007Bin 105896555 1
+nodestring:1
+nodestring:0
+nodestring:3
+nodestring:2
+active(0)>=1
+total size: 13.80 GB
+outgoing_adj_list size: 4.52 GB , percentage : 32.708249%
+incoming_adj_list size: 4.52 GB , percentage : 32.707505%
+send_buffer size: 1.01 GB , percentage : 7.336218%
+outgoing_adj_index size: 807.93 MB , percentage : 5.715474%
+incoming_adj_index size: 807.93 MB , percentage : 5.715474%
+recv_buffer size: 807.93 MB , percentage : 5.715474%
+in_degree size: 403.96 MB , percentage : 2.857737%
+out_degree size: 403.96 MB , percentage : 2.857737%
+compressed_outgoing_adj_index size: 297.43 MB , percentage : 2.104114%
+compressed_incoming_adj_index size: 297.08 MB , percentage : 2.101616%
+incoming_adj_bitmap size: 12.62 MB , percentage : 0.089304%
+outgoing_adj_bitmap size: 12.62 MB , percentage : 0.089304%
+local_send_buffer size: 256.00 KB , percentage : 0.001769%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000010%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000010%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 81.052433 %
+active(1)>=2
+active(2)>=6
+active(3)>=6
+active(4)>=5048
+active(5)>=151798
+active(6)>=5578381
+active(7)>=20892222
+active(8)>=52864917
+active(9)>=65971581
+active(10)>=74753173
+active(11)>=72521895
+active(12)>=70526224
+active(13)>=64097101
+active(14)>=58547971
+active(15)>=51496801
+active(16)>=45178955
+active(17)>=39443634
+active(18)>=33976742
+active(19)>=29609992
+active(20)>=25244846
+active(21)>=20750386
+active(22)>=16661368
+active(23)>=14180561
+active(24)>=11531228
+active(25)>=9956110
+active(26)>=8543699
+active(27)>=7378256
+active(28)>=7042011
+active(29)>=5966423
+active(30)>=5847538
+active(31)>=5766839
+active(32)>=5376977
+active(33)>=4560334
+active(34)>=3965890
+active(35)>=3191848
+active(36)>=2604339
+active(37)>=1838407
+active(38)>=1179748
+active(39)>=754816
+active(40)>=561505
+active(41)>=357261
+active(42)>=307395
+active(43)>=197320
+active(44)>=133898
+active(45)>=74562
+active(46)>=66086
+active(47)>=18200
+active(48)>=10150
+active(49)>=5669
+active(50)>=3082
+active(51)>=2349
+active(52)>=1374
+active(53)>=1118
+active(54)>=698
+active(55)>=580
+active(56)>=333
+active(57)>=254
+active(58)>=153
+active(59)>=149
+active(60)>=111
+active(61)>=94
+active(62)>=67
+active(63)>=61
+active(64)>=57
+active(65)>=55
+active(66)>=54
+active(67)>=53
+active(68)>=52
+active(69)>=51
+active(70)>=50
+active(71)>=49
+active(72)>=48
+active(73)>=47
+active(74)>=47
+active(75)>=45
+active(76)>=43
+active(77)>=42
+active(78)>=41
+active(79)>=40
+active(80)>=39
+active(81)>=38
+active(82)>=37
+active(83)>=36
+active(84)>=35
+active(85)>=34
+active(86)>=33
+active(87)>=33
+active(88)>=33
+active(89)>=32
+active(90)>=31
+active(91)>=30
+active(92)>=29
+active(93)>=29
+active(94)>=28
+active(95)>=28
+active(96)>=28
+active(97)>=28
+active(98)>=28
+active(99)>=28
+active(100)>=28
+active(101)>=28
+active(102)>=83
+active(103)>=137
+active(104)>=79
+active(105)>=22
+active(106)>=20
+active(107)>=18
+active(108)>=18
+active(109)>=18
+active(110)>=16
+active(111)>=14
+active(112)>=14
+active(113)>=14
+active(114)>=14
+active(115)>=14
+active(116)>=14
+active(117)>=14
+active(118)>=14
+active(119)>=14
+active(120)>=14
+active(121)>=14
+active(122)>=14
+active(123)>=14
+active(124)>=14
+active(125)>=14
+active(126)>=14
+active(127)>=14
+active(128)>=14
+active(129)>=14
+active(130)>=13
+active(131)>=12
+active(132)>=12
+active(133)>=12
+active(134)>=12
+active(135)>=10
+active(136)>=7
+active(137)>=6
+active(138)>=6
+active(139)>=6
+active(140)>=6
+active(141)>=6
+active(142)>=6
+active(143)>=6
+active(144)>=6
+active(145)>=6
+active(146)>=6
+active(147)>=6
+active(148)>=6
+active(149)>=6
+active(150)>=6
+active(151)>=6
+active(152)>=6
+active(153)>=6
+active(154)>=6
+active(155)>=6
+active(156)>=6
+active(157)>=6
+active(158)>=6
+active(159)>=6
+active(160)>=6
+active(161)>=6
+active(162)>=6
+active(163)>=6
+active(164)>=6
+active(165)>=6
+active(166)>=6
+active(167)>=6
+active(168)>=6
+active(169)>=6
+active(170)>=6
+active(171)>=6
+active(172)>=6
+active(173)>=6
+active(174)>=6
+active(175)>=6
+active(176)>=6
+active(177)>=6
+active(178)>=6
+active(179)>=6
+active(180)>=6
+active(181)>=6
+active(182)>=6
+active(183)>=6
+active(184)>=6
+active(185)>=6
+active(186)>=6
+active(187)>=6
+active(188)>=6
+active(189)>=6
+active(190)>=6
+active(191)>=6
+active(192)>=6
+active(193)>=6
+active(194)>=6
+active(195)>=6
+active(196)>=6
+active(197)>=6
+active(198)>=6
+active(199)>=6
+active(200)>=6
+active(201)>=6
+active(202)>=6
+active(203)>=6
+active(204)>=6
+active(205)>=6
+active(206)>=6
+active(207)>=6
+active(208)>=6
+active(209)>=6
+active(210)>=6
+active(211)>=6
+active(212)>=6
+active(213)>=6
+active(214)>=6
+active(215)>=6
+active(216)>=6
+active(217)>=6
+active(218)>=6
+active(219)>=6
+active(220)>=6
+active(221)>=6
+active(222)>=6
+active(223)>=6
+active(224)>=6
+active(225)>=6
+active(226)>=6
+active(227)>=6
+active(228)>=6
+active(229)>=6
+active(230)>=6
+active(231)>=6
+active(232)>=6
+active(233)>=6
+active(234)>=6
+active(235)>=6
+active(236)>=6
+active(237)>=6
+active(238)>=6
+active(239)>=6
+active(240)>=6
+active(241)>=6
+active(242)>=6
+active(243)>=6
+active(244)>=6
+active(245)>=6
+active(246)>=6
+active(247)>=6
+active(248)>=6
+active(249)>=6
+active(250)>=6
+active(251)>=6
+active(252)>=6
+active(253)>=6
+active(254)>=6
+active(255)>=6
+active(256)>=6
+active(257)>=6
+active(258)>=6
+active(259)>=6
+active(260)>=6
+active(261)>=6
+active(262)>=6
+active(263)>=6
+active(264)>=6
+active(265)>=6
+active(266)>=6
+active(267)>=6
+active(268)>=6
+active(269)>=6
+active(270)>=6
+active(271)>=6
+active(272)>=6
+active(273)>=6
+active(274)>=6
+active(275)>=6
+active(276)>=6
+active(277)>=6
+active(278)>=6
+active(279)>=6
+active(280)>=6
+active(281)>=6
+active(282)>=6
+active(283)>=6
+active(284)>=6
+active(285)>=6
+active(286)>=6
+active(287)>=6
+active(288)>=6
+active(289)>=6
+active(290)>=6
+active(291)>=6
+active(292)>=6
+active(293)>=6
+active(294)>=6
+active(295)>=6
+active(296)>=6
+active(297)>=6
+active(298)>=6
+active(299)>=6
+active(300)>=6
+active(301)>=6
+active(302)>=6
+active(303)>=6
+active(304)>=6
+active(305)>=6
+active(306)>=6
+active(307)>=6
+active(308)>=6
+active(309)>=6
+active(310)>=6
+active(311)>=6
+active(312)>=6
+active(313)>=6
+active(314)>=6
+active(315)>=6
+active(316)>=6
+active(317)>=6
+active(318)>=6
+active(319)>=6
+active(320)>=6
+active(321)>=6
+active(322)>=6
+active(323)>=6
+active(324)>=6
+active(325)>=6
+active(326)>=6
+active(327)>=6
+active(328)>=6
+active(329)>=6
+active(330)>=6
+active(331)>=6
+active(332)>=6
+active(333)>=6
+active(334)>=6
+active(335)>=6
+active(336)>=6
+active(337)>=6
+active(338)>=6
+active(339)>=6
+active(340)>=6
+active(341)>=6
+active(342)>=6
+active(343)>=6
+active(344)>=6
+active(345)>=6
+active(346)>=6
+active(347)>=6
+active(348)>=6
+active(349)>=6
+active(350)>=6
+active(351)>=6
+active(352)>=6
+active(353)>=6
+active(354)>=6
+active(355)>=6
+active(356)>=6
+active(357)>=6
+active(358)>=6
+active(359)>=6
+active(360)>=6
+active(361)>=6
+active(362)>=6
+active(363)>=6
+active(364)>=6
+active(365)>=6
+active(366)>=6
+active(367)>=6
+active(368)>=6
+active(369)>=6
+active(370)>=6
+active(371)>=6
+active(372)>=6
+active(373)>=6
+active(374)>=6
+active(375)>=6
+active(376)>=6
+active(377)>=6
+active(378)>=6
+active(379)>=6
+active(380)>=6
+active(381)>=6
+active(382)>=6
+active(383)>=6
+active(384)>=6
+active(385)>=6
+active(386)>=6
+active(387)>=6
+active(388)>=6
+active(389)>=6
+active(390)>=6
+active(391)>=6
+active(392)>=6
+active(393)>=6
+active(394)>=6
+active(395)>=6
+active(396)>=6
+active(397)>=6
+active(398)>=6
+active(399)>=6
+active(400)>=6
+active(401)>=6
+active(402)>=6
+active(403)>=6
+active(404)>=6
+active(405)>=6
+active(406)>=6
+active(407)>=6
+active(408)>=6
+active(409)>=6
+active(410)>=6
+active(411)>=6
+active(412)>=6
+active(413)>=6
+active(414)>=6
+active(415)>=6
+active(416)>=6
+active(417)>=6
+active(418)>=6
+active(419)>=6
+active(420)>=6
+active(421)>=6
+active(422)>=6
+active(423)>=6
+active(424)>=6
+active(425)>=6
+active(426)>=6
+active(427)>=6
+active(428)>=6
+active(429)>=6
+active(430)>=6
+active(431)>=6
+active(432)>=6
+active(433)>=6
+active(434)>=6
+active(435)>=6
+active(436)>=6
+active(437)>=6
+active(438)>=6
+active(439)>=6
+active(440)>=6
+active(441)>=6
+active(442)>=6
+active(443)>=6
+active(444)>=6
+active(445)>=6
+active(446)>=6
+active(447)>=6
+active(448)>=6
+active(449)>=6
+active(450)>=6
+active(451)>=6
+active(452)>=6
+active(453)>=6
+active(454)>=6
+active(455)>=6
+active(456)>=6
+active(457)>=6
+active(458)>=6
+active(459)>=6
+active(460)>=6
+active(461)>=6
+active(462)>=6
+active(463)>=6
+active(464)>=6
+active(465)>=6
+active(466)>=6
+active(467)>=6
+active(468)>=6
+active(469)>=6
+active(470)>=6
+active(471)>=6
+active(472)>=6
+active(473)>=6
+active(474)>=6
+active(475)>=6
+active(476)>=6
+active(477)>=6
+active(478)>=6
+active(479)>=6
+active(480)>=6
+active(481)>=6
+active(482)>=6
+active(483)>=6
+active(484)>=6
+active(485)>=6
+active(486)>=6
+active(487)>=6
+active(488)>=6
+active(489)>=6
+active(490)>=6
+active(491)>=6
+active(492)>=6
+active(493)>=6
+active(494)>=6
+active(495)>=6
+active(496)>=6
+active(497)>=6
+active(498)>=6
+active(499)>=6
+active(500)>=6
+active(501)>=6
+active(502)>=6
+active(503)>=6
+active(504)>=6
+active(505)>=6
+active(506)>=6
+active(507)>=6
+active(508)>=6
+active(509)>=6
+active(510)>=6
+active(511)>=6
+active(512)>=6
+active(513)>=6
+active(514)>=6
+active(515)>=6
+active(516)>=6
+active(517)>=6
+active(518)>=6
+active(519)>=6
+active(520)>=6
+active(521)>=6
+active(522)>=5
+active(523)>=4
+active(524)>=3
+active(525)>=2
+active(526)>=1
+partition: 1,exec_time=2.328036(s)
+partition: 3,exec_time=2.487877(s)
+partition: 2,exec_time=2.427794(s)
+partition: 0,exec_time=2.283442(s)
+partiton_id: 1, total_process_time  =1.911442(s)
+partiton_id: 2, total_process_time  =2.095288(s)
+partiton_id: 3, total_process_time  =2.166738(s)
+distance[104209786]=0.000000
+partiton_id: 0, total_process_time  =1.895322(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/sssp ../../data/rMat24Bin 16800000 1
+nodestring:1
+nodestring:2
+nodestring:3
+nodestring:0
+active(0)>=1
+total size: 1.17 GB
+incoming_adj_list size: 177.57 MB , percentage : 14.830078%
+outgoing_adj_list size: 177.56 MB , percentage : 14.829887%
+send_buffer size: 149.38 MB , percentage : 12.475650%
+outgoing_adj_index size: 128.17 MB , percentage : 10.704950%
+incoming_adj_index size: 128.17 MB , percentage : 10.704950%
+recv_buffer size: 128.17 MB , percentage : 10.704950%
+compressed_outgoing_adj_index size: 87.94 MB , percentage : 7.344577%
+compressed_incoming_adj_index size: 87.94 MB , percentage : 7.344318%
+in_degree size: 64.09 MB , percentage : 5.352475%
+out_degree size: 64.09 MB , percentage : 5.352475%
+incoming_adj_bitmap size: 2.00 MB , percentage : 0.167265%
+outgoing_adj_bitmap size: 2.00 MB , percentage : 0.167265%
+local_send_buffer size: 256.00 KB , percentage : 0.020880%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000122%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000122%
+thread_state size: 384 B , percentage : 0.000031%
+partition_offset size: 20 B , percentage : 0.000002%
+incoming_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 65.758761 %
+active(1)>=289
+active(2)>=4360
+active(3)>=53688
+active(4)>=599746
+active(5)>=4077592
+active(6)>=10455226
+active(7)>=11473179
+active(8)>=10078176
+active(9)>=8775437
+active(10)>=7612373
+active(11)>=6549639
+active(12)>=5570016
+active(13)>=4689389
+active(14)>=3908241
+active(15)>=3217482
+active(16)>=2619177
+active(17)>=2096044
+active(18)>=1647772
+active(19)>=1275237
+active(20)>=967141
+active(21)>=716110
+active(22)>=516099
+active(23)>=360866
+active(24)>=246173
+active(25)>=163497
+active(26)>=107430
+active(27)>=70568
+active(28)>=46148
+active(29)>=29544
+active(30)>=18737
+active(31)>=11323
+active(32)>=6441
+active(33)>=3402
+active(34)>=1614
+active(35)>=751
+active(36)>=363
+active(37)>=185
+active(38)>=105
+active(39)>=49
+active(40)>=11
+partition: 2,exec_time=0.886811(s)
+partition: 0,exec_time=0.864659(s)
+partition: 3,exec_time=0.905059(s)
+partition: 1,exec_time=0.877929(s)
+partiton_id: 1, total_process_time  =0.805143(s)
+partiton_id: 2, total_process_time  =0.827817(s)
+partiton_id: 3, total_process_time  =0.873768(s)
+distance[14695737]=0.000000
+partiton_id: 0, total_process_time  =0.845538(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/sssp ../../data/rMat27Bin 134000000 1
+nodestring:0
+nodestring:3
+nodestring:2
+nodestring:1
+active(0)>=1
+total size: 16.06 GB
+outgoing_adj_list size: 5.26 GB , percentage : 32.761177%
+incoming_adj_list size: 5.26 GB , percentage : 32.760982%
+outgoing_adj_index size: 1022.34 MB , percentage : 6.216934%
+incoming_adj_index size: 1022.34 MB , percentage : 6.216934%
+recv_buffer size: 1022.34 MB , percentage : 6.216934%
+send_buffer size: 717.03 MB , percentage : 4.360331%
+in_degree size: 511.17 MB , percentage : 3.108467%
+out_degree size: 511.17 MB , percentage : 3.108467%
+compressed_incoming_adj_index size: 415.55 MB , percentage : 2.527019%
+compressed_outgoing_adj_index size: 415.54 MB , percentage : 2.526938%
+incoming_adj_bitmap size: 15.97 MB , percentage : 0.097140%
+outgoing_adj_bitmap size: 15.97 MB , percentage : 0.097140%
+local_send_buffer size: 256.00 KB , percentage : 0.001520%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000009%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000009%
+thread_state size: 384 B , percentage : 0.000002%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 83.009982 %
+active(1)>=241269
+active(2)>=39221474
+active(3)>=50609978
+active(4)>=41773270
+active(5)>=32845744
+active(6)>=20302449
+active(7)>=9910290
+active(8)>=4075419
+active(9)>=1487732
+active(10)>=507316
+active(11)>=159688
+active(12)>=46257
+active(13)>=14356
+active(14)>=4647
+active(15)>=1038
+active(16)>=152
+active(17)>=55
+active(18)>=22
+active(19)>=1
+partition: 3,exec_time=1.718280(s)
+partition: 1,exec_time=1.537134(s)
+partition: 0,exec_time=1.384673(s)
+partition: 2,exec_time=1.592327(s)
+partiton_id: 1, total_process_time  =1.165616(s)
+partiton_id: 2, total_process_time  =1.403180(s)
+partiton_id: 3, total_process_time  =1.675663(s)
+distance[88927923]=0.000000
+partiton_id: 0, total_process_time  =1.309704(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bc ../../data/twitter-2010Bin 41652230 1
+nodestring:2
+nodestring:0
+nodestring:3
+nodestring:1
+active(0)>=1
+total size: 4.88 GB
+outgoing_adj_list size: 1.23 GB , percentage : 25.144300%
+send_buffer size: 1.01 GB , percentage : 20.681024%
+incoming_adj_list size: 700.28 MB , percentage : 14.018228%
+recv_buffer size: 476.67 MB , percentage : 9.541986%
+compressed_outgoing_adj_index size: 391.66 MB , percentage : 7.840310%
+outgoing_adj_index size: 317.78 MB , percentage : 6.361324%
+incoming_adj_index size: 317.78 MB , percentage : 6.361324%
+compressed_incoming_adj_index size: 174.03 MB , percentage : 3.483814%
+in_degree size: 158.89 MB , percentage : 3.180662%
+out_degree size: 158.89 MB , percentage : 3.180662%
+incoming_adj_bitmap size: 4.97 MB , percentage : 0.099396%
+outgoing_adj_bitmap size: 4.97 MB , percentage : 0.099396%
+local_send_buffer size: 384.00 KB , percentage : 0.007507%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000029%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000029%
+thread_state size: 384 B , percentage : 0.000007%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 63.209301 %
+active(1)>=1
+active(2)>=1
+active(3)>=38
+active(4)>=2490
+active(5)>=3316274
+active(6)>=21796563
+active(7)>=8718595
+active(8)>=1066115
+active(9)>=104226
+active(10)>=10512
+active(11)>=1145
+active(12)>=144
+active(13)>=25
+active(14)>=6
+active(15)>=2
+active(16)>=1
+partition: 2,exec_time=0.812585(s)
+partition: 3,exec_time=0.797236(s)
+partition: 1,exec_time=0.849720(s)
+partition: 0,exec_time=0.745290(s)
+partiton_id: 1, total_process_time  =0.753639(s)
+partiton_id: 2, total_process_time  =0.662607(s)
+partiton_id: 3, total_process_time  =0.615823(s)
+partiton_id: 0, total_process_time  =0.651550(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bc ../../data/enwiki-2013in 4206785 1
+nodestring:0
+nodestring:3
+nodestring:1
+nodestring:2
+active(0)>=1
+total size: 475.71 MB
+outgoing_adj_list size: 114.45 MB , percentage : 24.059056%
+incoming_adj_list size: 104.18 MB , percentage : 21.900500%
+send_buffer size: 55.31 MB , percentage : 11.627283%
+recv_buffer size: 48.14 MB , percentage : 10.120142%
+compressed_outgoing_adj_index size: 33.59 MB , percentage : 7.060080%
+outgoing_adj_index size: 32.10 MB , percentage : 6.746763%
+incoming_adj_index size: 32.10 MB , percentage : 6.746763%
+compressed_incoming_adj_index size: 22.37 MB , percentage : 4.702281%
+in_degree size: 16.05 MB , percentage : 3.373381%
+out_degree size: 16.05 MB , percentage : 3.373381%
+incoming_adj_bitmap size: 513.53 KB , percentage : 0.105420%
+outgoing_adj_bitmap size: 513.53 KB , percentage : 0.105420%
+local_send_buffer size: 384.00 KB , percentage : 0.078829%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000308%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000308%
+thread_state size: 384 B , percentage : 0.000077%
+partition_offset size: 20 B , percentage : 0.000004%
+incoming_edges size: 8 B , percentage : 0.000002%
+local_partition_offset size: 8 B , percentage : 0.000002%
+outgoing_edges size: 8 B , percentage : 0.000002%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000001%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000001%
+remote memory percentage: 71.215442 %
+active(1)>=2
+active(2)>=8
+active(3)>=557
+active(4)>=31656
+active(5)>=620492
+active(6)>=1941317
+active(7)>=936392
+active(8)>=184285
+active(9)>=28015
+active(10)>=3258
+active(11)>=874
+active(12)>=355
+active(13)>=254
+active(14)>=148
+active(15)>=115
+active(16)>=106
+active(17)>=66
+active(18)>=57
+active(19)>=57
+active(20)>=63
+active(21)>=58
+active(22)>=46
+active(23)>=38
+active(24)>=32
+active(25)>=27
+active(26)>=20
+active(27)>=19
+active(28)>=14
+active(29)>=15
+active(30)>=12
+active(31)>=13
+active(32)>=11
+active(33)>=9
+active(34)>=8
+active(35)>=6
+active(36)>=6
+active(37)>=6
+active(38)>=7
+active(39)>=8
+active(40)>=6
+active(41)>=4
+active(42)>=4
+active(43)>=4
+active(44)>=3
+active(45)>=2
+active(46)>=2
+active(47)>=2
+active(48)>=1
+active(49)>=1
+active(50)>=1
+active(51)>=1
+active(52)>=1
+partition: 0,exec_time=0.226167(s)
+partition: 3,exec_time=0.228424(s)
+partition: 1,exec_time=0.225713(s)
+partition: 2,exec_time=0.227227(s)
+partiton_id: 1, total_process_time  =0.198999(s)
+partiton_id: 2, total_process_time  =0.202887(s)
+partiton_id: 3, total_process_time  =0.207459(s)
+partiton_id: 0, total_process_time  =0.211428(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bc ../../data/uk-2007Bin 105896555 1
+nodestring:2
+nodestring:1
+nodestring:3
+nodestring:0
+active(0)>=1
+total size: 12.51 GB
+incoming_adj_list size: 3.41 GB , percentage : 27.238561%
+outgoing_adj_list size: 3.40 GB , percentage : 27.166366%
+send_buffer size: 1.53 GB , percentage : 12.206358%
+recv_buffer size: 1.18 GB , percentage : 9.464056%
+outgoing_adj_index size: 807.93 MB , percentage : 6.309370%
+incoming_adj_index size: 807.93 MB , percentage : 6.309370%
+in_degree size: 403.96 MB , percentage : 3.154685%
+out_degree size: 403.96 MB , percentage : 3.154685%
+compressed_outgoing_adj_index size: 314.73 MB , percentage : 2.457860%
+compressed_incoming_adj_index size: 299.46 MB , percentage : 2.338565%
+incoming_adj_bitmap size: 12.62 MB , percentage : 0.098584%
+outgoing_adj_bitmap size: 12.62 MB , percentage : 0.098584%
+local_send_buffer size: 384.00 KB , percentage : 0.002929%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000011%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000011%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 71.820093 %
+active(1)>=5
+active(2)>=11
+active(3)>=261
+active(4)>=1664
+active(5)>=5390
+active(6)>=48352
+active(7)>=280149
+active(8)>=984412
+active(9)>=3111692
+active(10)>=7484395
+active(11)>=12577761
+active(12)>=15371217
+active(13)>=15478808
+active(14)>=12220612
+active(15)>=9424784
+active(16)>=6038525
+active(17)>=3919965
+active(18)>=2690087
+active(19)>=1868003
+active(20)>=1366990
+active(21)>=981533
+active(22)>=736931
+active(23)>=486772
+active(24)>=334492
+active(25)>=231497
+active(26)>=142813
+active(27)>=86822
+active(28)>=43712
+active(29)>=22341
+active(30)>=15069
+active(31)>=10570
+active(32)>=6487
+active(33)>=6167
+active(34)>=5132
+active(35)>=3534
+active(36)>=568
+active(37)>=471
+active(38)>=398
+active(39)>=401
+active(40)>=378
+active(41)>=347
+active(42)>=327
+active(43)>=274
+active(44)>=274
+active(45)>=279
+active(46)>=269
+active(47)>=278
+active(48)>=264
+active(49)>=256
+active(50)>=254
+active(51)>=253
+active(52)>=254
+active(53)>=252
+active(54)>=253
+active(55)>=249
+active(56)>=249
+active(57)>=248
+active(58)>=248
+active(59)>=248
+active(60)>=247
+active(61)>=249
+active(62)>=248
+active(63)>=248
+active(64)>=248
+active(65)>=248
+active(66)>=248
+active(67)>=248
+active(68)>=248
+active(69)>=248
+active(70)>=248
+active(71)>=246
+active(72)>=237
+active(73)>=228
+active(74)>=220
+active(75)>=217
+active(76)>=217
+active(77)>=217
+active(78)>=217
+active(79)>=217
+active(80)>=217
+active(81)>=217
+active(82)>=216
+active(83)>=208
+active(84)>=188
+active(85)>=172
+active(86)>=161
+active(87)>=157
+active(88)>=157
+active(89)>=129
+active(90)>=128
+active(91)>=126
+active(92)>=126
+active(93)>=126
+active(94)>=125
+active(95)>=124
+active(96)>=123
+active(97)>=125
+active(98)>=124
+active(99)>=124
+active(100)>=123
+active(101)>=92
+active(102)>=82
+active(103)>=70
+active(104)>=63
+active(105)>=62
+active(106)>=62
+active(107)>=62
+active(108)>=59
+active(109)>=50
+active(110)>=38
+active(111)>=34
+active(112)>=31
+active(113)>=31
+active(114)>=31
+active(115)>=3
+active(116)>=1
+partition: 2,exec_time=2.626219(s)
+partition: 1,exec_time=2.515463(s)
+partition: 0,exec_time=2.467352(s)
+partition: 3,exec_time=2.683307(s)
+partiton_id: 1, total_process_time  =1.623768(s)
+partiton_id: 2, total_process_time  =1.727208(s)
+partiton_id: 3, total_process_time  =1.778833(s)
+partiton_id: 0, total_process_time  =1.556702(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bc ../../data/rMat24Bin 16800000 1
+nodestring:0
+nodestring:1
+nodestring:2
+nodestring:3
+active(0)>=1
+total size: 1.24 GB
+send_buffer size: 217.03 MB , percentage : 17.132186%
+recv_buffer size: 192.26 MB , percentage : 15.176832%
+incoming_adj_list size: 131.44 MB , percentage : 10.376060%
+outgoing_adj_list size: 130.80 MB , percentage : 10.325218%
+outgoing_adj_index size: 128.17 MB , percentage : 10.117888%
+incoming_adj_index size: 128.17 MB , percentage : 10.117888%
+compressed_incoming_adj_index size: 103.50 MB , percentage : 8.169969%
+compressed_outgoing_adj_index size: 102.86 MB , percentage : 8.120020%
+in_degree size: 64.09 MB , percentage : 5.058944%
+out_degree size: 64.09 MB , percentage : 5.058944%
+incoming_adj_bitmap size: 2.00 MB , percentage : 0.158093%
+outgoing_adj_bitmap size: 2.00 MB , percentage : 0.158093%
+local_send_buffer size: 384.00 KB , percentage : 0.029602%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000116%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000116%
+thread_state size: 384 B , percentage : 0.000029%
+partition_offset size: 20 B , percentage : 0.000002%
+incoming_edges size: 8 B , percentage : 0.000001%
+local_partition_offset size: 8 B , percentage : 0.000001%
+outgoing_edges size: 8 B , percentage : 0.000001%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 57.227044 %
+active(1)>=429
+active(2)>=9530
+active(3)>=175466
+active(4)>=2248913
+active(5)>=7877915
+active(6)>=4080363
+active(7)>=484098
+active(8)>=33466
+active(9)>=2161
+active(10)>=140
+active(11)>=16
+active(12)>=2
+partition: 3,exec_time=0.408830(s)
+partition: 1,exec_time=0.376318(s)
+partition: 2,exec_time=0.388113(s)
+partition: 0,exec_time=0.365241(s)
+partiton_id: 1, total_process_time  =0.315886(s)
+partiton_id: 2, total_process_time  =0.349204(s)
+partiton_id: 3, total_process_time  =0.380074(s)
+partiton_id: 0, total_process_time  =0.320591(s)
+run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 4 --map-by socket  ./toolkits/bc ../../data/rMat27Bin 134000000 1
+nodestring:0
+nodestring:1
+nodestring:3
+nodestring:2
+active(0)>=1
+total size: 13.29 GB
+incoming_adj_list size: 3.47 GB , percentage : 26.095243%
+outgoing_adj_list size: 3.46 GB , percentage : 26.054533%
+recv_buffer size: 1.50 GB , percentage : 11.268350%
+outgoing_adj_index size: 1022.34 MB , percentage : 7.512233%
+incoming_adj_index size: 1022.34 MB , percentage : 7.512233%
+send_buffer size: 958.36 MB , percentage : 7.042106%
+in_degree size: 511.17 MB , percentage : 3.756117%
+out_degree size: 511.17 MB , percentage : 3.756117%
+compressed_incoming_adj_index size: 460.89 MB , percentage : 3.386681%
+compressed_outgoing_adj_index size: 459.83 MB , percentage : 3.378849%
+incoming_adj_bitmap size: 15.97 MB , percentage : 0.117379%
+outgoing_adj_bitmap size: 15.97 MB , percentage : 0.117379%
+local_send_buffer size: 384.00 KB , percentage : 0.002756%
+tuned_chunks_dense size: 1.50 KB , percentage : 0.000011%
+tuned_chunks_sparse size: 1.50 KB , percentage : 0.000011%
+thread_state size: 384 B , percentage : 0.000003%
+partition_offset size: 20 B , percentage : 0.000000%
+incoming_edges size: 8 B , percentage : 0.000000%
+local_partition_offset size: 8 B , percentage : 0.000000%
+outgoing_edges size: 8 B , percentage : 0.000000%
+compressed_incoming_adj_vertices size: 4 B , percentage : 0.000000%
+compressed_outgoing_adj_vertices size: 4 B , percentage : 0.000000%
+remote memory percentage: 73.939773 %
+active(1)>=320654
+active(2)>=34252481
+active(3)>=17050580
+active(4)>=200650
+active(5)>=1326
+active(6)>=4
+partition: 2,exec_time=1.255480(s)
+partition: 3,exec_time=1.393480(s)
+partition: 1,exec_time=1.176987(s)
+partition: 0,exec_time=1.066342(s)
+partiton_id: 1, total_process_time  =0.883972(s)
+partiton_id: 2, total_process_time  =0.973426(s)
+partiton_id: 3, total_process_time  =1.215146(s)
+partiton_id: 0, total_process_time  =0.918955(s)

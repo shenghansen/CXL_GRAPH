@@ -1944,6 +1944,7 @@ public:
                 //     global_max*unit_size);
             }
         }
+        MPI_Barrier(MPI_COMM_WORLD);
         compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
         MPI_Barrier(MPI_COMM_WORLD);
         for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历numa
@@ -2304,6 +2305,7 @@ public:
         MPI_Datatype dt = get_mpi_data_type<R>();
         MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
         stream_time += MPI_Wtime();
+        total_process_time += stream_time;
 #ifdef PRINT_DEBUG_MESSAGES
         if (partition_id == 0) {
             printf("process_vertices took %lf (s)\n", stream_time);
@@ -2459,6 +2461,7 @@ public:
     // need rewrite current_send_part_id ,make it shared
     template<typename M> void flush_local_send_buffer_to_other(int t_i, int id) {
         int s_i = get_socket_id(t_i);   // 线程在那个socket
+        printf("%d steal %d current part%d\n", partition_id, id, global_current_send_part_id[id].load());
         int pos = __sync_fetch_and_add(
             &gim_send_buffer[id][global_current_send_part_id[id]][s_i]->count,
             local_send_buffer[t_i]
@@ -2688,7 +2691,7 @@ public:
                     __asm volatile("pause" ::: "memory");
                 }
                 int i = recv_queue[step];
-                global_current_send_part_id[partition_id]=i;
+                global_current_send_part_id[partition_id] = i;
                 // MessageBuffer** used_buffer;
                 GIMMessageBuffer** used_buffer;
                 if (i == partition_id) {
@@ -2797,14 +2800,14 @@ public:
                 }
             }
             // 全局工作窃取
-            //TODO: fix socket 
+            // TODO: fix socket
 #ifdef GLOBAL_STEALING_SPRASE
             for (int step = 1; step < partitions; step++) {
                 int i = (partition_id - step + partitions) % partitions;
                 // 怎么判断这个节点需不需要工作窃取
                 __sync_fetch_and_add(&stealingss[i], 1);
                 //  stealings[i]++;
-#pragma omp parallel reduction(+ : reducer)
+#    pragma omp parallel reduction(+ : reducer)
                 {
                     R local_reducer = 0;
                     int thread_id = omp_get_thread_num();
@@ -2825,11 +2828,11 @@ public:
                             for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                                 // VertexId v_i = buffer[b_i].vertex;
                                 // M msg_data = buffer[b_i].msg_data;
-                                MsgUnit<M>* buffer; if (global_current_send_part_id[i] == i) {
-                                     buffer = (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
-                                }
-                                else {
-                                     buffer =
+                                MsgUnit<M>* buffer;
+                                if (global_current_send_part_id[i] == i) {
+                                    buffer = (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
+                                } else {
+                                    buffer =
                                         (MsgUnit<M>*)
                                             gim_recv_buffer[i][global_current_send_part_id[i]][0]
                                                 ->data;
@@ -2853,7 +2856,7 @@ public:
                     }
                     reducer += local_reducer;
                 }
-                
+
                 // stealings[i]--;
                 __sync_fetch_and_add(&stealingss[i], -1);
             }
@@ -3022,7 +3025,7 @@ public:
             current_send_part_id = partition_id;
             for (int step = 0; step < partitions; step++) {
                 current_send_part_id = (current_send_part_id + 1) % partitions;
-                global_current_send_part_id[partition_id] = (current_send_part_id + 1) % partitions;
+                global_current_send_part_id[partition_id] = current_send_part_id;//存疑，要不要锁
                 int i = current_send_part_id;
                 for (int t_i = 0; t_i < threads; t_i++) {
                     *thread_state[t_i] = tuned_chunks_dense[i][t_i];
@@ -3094,7 +3097,7 @@ public:
                 }
                 // 确保其他节点窃取的任务完成
                 while (stealingss[partition_id] != 0) {
-                    printf("stealings:%d\n", stealingss[partition_id]);
+                    printf("stealings:%d ,send_part:%d.%d\n", stealingss[partition_id],current_send_part_id,global_current_send_part_id[partition_id].load());
                     __asm volatile("pause" ::: "memory");
                 }
                 // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
@@ -3115,7 +3118,7 @@ public:
                 }
                 __sync_fetch_and_add(&stealingss[i], 1);
                 //  stealings[i]++;
-#    pragma omp parallel
+#pragma omp parallel
                 {
                     int thread_id = omp_get_thread_num();
 
@@ -3147,7 +3150,7 @@ public:
                         }
                     }
                 }
-#    pragma omp parallel for
+#pragma omp parallel for
                 for (int t_i = 0; t_i < threads; t_i++) {
                     flush_local_send_buffer_to_other<M>(t_i, i);
                 }

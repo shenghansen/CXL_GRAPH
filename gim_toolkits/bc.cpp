@@ -48,6 +48,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
     MPI_Barrier(MPI_COMM_WORLD);
     active_all->fill();
     std::vector<VertexSubset*> levels;
+    std::vector<VertexSubset**> global_levels;
 
     VertexId active_vertices = 1;
     visited->clear();
@@ -55,6 +56,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
     active_in->clear();
     active_in->set_bit(root);
     levels.push_back(active_in);
+    global_levels.push_back(global_active_in);
     graph->fill_vertex_array(num_paths, 0.0);
     num_paths[root] = 1.0;
     VertexId i_i;
@@ -119,17 +121,34 @@ void compute(Graph<Empty>* graph, VertexId root) {
             },
             active_in,
             visited);
+#ifndef GLOBAL_STEALING_VERTICES
         active_vertices = graph->process_vertices<VertexId>(   // 用来标记点访问过了
             [&](VertexId vtx) {
                 visited->set_bit(vtx);
                 return 1;
             },
             active_out);
+            #else
+        active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
+            [&](VertexId vtx, int partition_id) {
+                if (partition_id == -1) {
+                    visited->set_bit(vtx);
+                    return 1;
+                } else {
+                    global_visited[partition_id]->set_bit(vtx);
+                    return 1;
+                }
+            },
+            global_active_out);
+#endif
         levels.push_back(active_out);
+        global_levels.push_back(global_active_out);
         active_in = active_out;
+        global_active_in=global_active_out;
     }
 
     double* inv_num_paths = num_paths;
+#ifndef GLOBAL_STEALING_VERTICES
     graph->process_vertices<VertexId>(
         [&](VertexId vtx) {
             inv_num_paths[vtx] = 1 / num_paths[vtx];
@@ -145,10 +164,42 @@ void compute(Graph<Empty>* graph, VertexId root) {
             return 1;
         },
         levels.back());
+#else
+    graph->process_vertices_global<VertexId>(
+        [&](VertexId vtx, int partition_id) {
+            if(partition_id==-1){
+                inv_num_paths[vtx] = 1 / num_paths[vtx];
+                dependencies[vtx] = 0;
+                return 1;
+            }else{
+                global_num_paths[partition_id][vtx] = 1 / global_num_paths[partition_id][vtx];
+                global_dependencies[partition_id][vtx] = 0;
+                return 1;
+            }
+            
+        },
+        global_active_all);
+    visited->clear();
+    graph->process_vertices_global<VertexId>(
+        [&](VertexId vtx, int partition_id) {
+            if (partition_id == -1) {
+                visited->set_bit(vtx);
+                dependencies[vtx] += inv_num_paths[vtx];
+                return 1;
+            } else {
+                global_visited[partition_id]->set_bit(vtx);
+                global_dependencies[partition_id][vtx] += global_num_paths[partition_id][vtx];
+                return 1;
+            }
+        },
+        global_levels.back());
+#endif
+    
+
     graph->transpose();
-    if (graph->partition_id == 0) {
-        // printf("backward\n");
-    }
+    // if (graph->partition_id == 0) {
+    //     printf("backward\n");
+    // }
     while (levels.size() > 1) {
         graph->process_edges<VertexId, double>(
             [&](VertexId src) { graph->emit(src, dependencies[src]); },
@@ -192,6 +243,8 @@ void compute(Graph<Empty>* graph, VertexId root) {
             visited);
         delete levels.back();
         levels.pop_back();
+        global_levels.pop_back();
+#ifndef GLOBAL_STEALING_VERTICES
         graph->process_vertices<VertexId>(
             [&](VertexId vtx) {
                 visited->set_bit(vtx);
@@ -199,14 +252,45 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 return 1;
             },
             levels.back());
+            #else
+        graph->process_vertices_global<VertexId>(
+            [&](VertexId vtx,int partition_id) {
+                if(partition_id==-1){
+                    visited->set_bit(vtx);
+                    dependencies[vtx] += inv_num_paths[vtx];
+                    return 1;
+                }else{
+                    global_visited[partition_id]->set_bit(vtx);
+                    global_dependencies[partition_id][vtx] += global_num_paths[partition_id][vtx];
+                    return 1;
+                }
+                
+            },
+            global_levels.back());
+#endif
     }
-
+#ifndef GLOBAL_STEALING_VERTICES
     graph->process_vertices<VertexId>(
         [&](VertexId vtx) {
             dependencies[vtx] = (dependencies[vtx] - inv_num_paths[vtx]) / inv_num_paths[vtx];
             return 1;
         },
         active_all);
+#else
+    graph->process_vertices_global<VertexId>(
+        [&](VertexId vtx, int partition_id) {
+            if (partition_id == -1) {
+                dependencies[vtx] = (dependencies[vtx] - inv_num_paths[vtx]) / inv_num_paths[vtx];
+                return 1;
+            } else {
+                global_dependencies[partition_id][vtx] =
+                    (global_dependencies[partition_id][vtx] - global_num_paths[partition_id][vtx]) /
+                    global_num_paths[partition_id][vtx];
+                return 1;
+            }
+        },
+        global_active_all);
+#endif
     graph->transpose();
 
     exec_time += get_time();
@@ -217,9 +301,9 @@ void compute(Graph<Empty>* graph, VertexId root) {
     graph->gather_vertex_array(dependencies, 0);
     graph->gather_vertex_array(inv_num_paths, 0);
     if (graph->partition_id == 0) {
-        // for (VertexId v_i=0;v_i<20;v_i++) {
-        //   printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
-        // }
+        for (VertexId v_i=0;v_i<20;v_i++) {
+          printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
+        }
     }
 
     graph->dealloc_vertex_array(dependencies);
