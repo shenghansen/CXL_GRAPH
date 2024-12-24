@@ -17,7 +17,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #ifndef GRAPH_HPP
 #define GRAPH_HPP
 #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
-    #define UNIDIRECTIONAL_MODE
+#    define UNIDIRECTIONAL_MODE
 #endif
 
 #include <atomic>
@@ -120,7 +120,7 @@ struct MessageBuffer {
 struct GIMMessageBuffer {
     int count;
     CXL_SHM* cxl_shm;
-   
+
     int host_id;
     int numa_id;
     size_t capacity;
@@ -519,7 +519,7 @@ public:
 #ifdef UNIDIRECTIONAL_MODE
             completion_tags[i] = new std::atomic<bool>**[partitions];
             length_array[i] = new size_t*[partitions];
-#endif           
+#endif
             for (size_t j = 0; j < partitions; j++) {
                 gim_send_buffer[i][j] = new GIMMessageBuffer*[sockets];
                 gim_recv_buffer[i][j] = new GIMMessageBuffer*[sockets];
@@ -537,7 +537,7 @@ public:
                     gim_recv_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
                     gim_recv_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
                                                      sockets);
-#ifdef UNIDIRECTIONAL_MODE      
+#ifdef UNIDIRECTIONAL_MODE
                     // 实际上是已经分配好了一个gim，然后再把对应的位置指针返回，并没有每次都malloc
                     completion_tags[i][j][s_i] =
                         (std::atomic<bool>*)cxl_shm->GIM_malloc(sizeof(std::atomic<bool>), i, s_i);
@@ -2693,7 +2693,7 @@ public:
                     }
                 }
             });
-            
+
             int expected_partition = partition_id + 1;
             // 标记有接收自己的消息
             completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
@@ -2776,8 +2776,8 @@ public:
 
             // 现在数据都到每个host的recv_buffer里了
             std::thread check_thread;
-            check_thread = std::thread(
-                check_blocking, std::ref(recv_queue_mutex), std::ref(recv_queue_size), 0);
+            // check_thread = std::thread(
+            //     check_blocking, std::ref(recv_queue_mutex), std::ref(recv_queue_size), 0);
             for (int step = 0; step < partitions; step++) {   // 遍历所有分区，这里是串行的
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
                 while (true) {
@@ -2794,13 +2794,7 @@ public:
 
                 int i = expected_partition;
 #else
-                while (true) {
-                    recv_queue_mutex.lock();
-                    bool condition =
-                        (recv_queue_size <= step);   // 当前分区接受完成才继续后面的计算
-                    recv_queue_mutex.unlock();
-                    if (!condition) break;
-                    __asm volatile("pause" ::: "memory");
+
                 // while (true) {
                 //     recv_queue_mutex.lock();
                 //     bool condition =
@@ -2809,7 +2803,7 @@ public:
                 //     if (!condition) break;
                 //     __asm volatile("pause" ::: "memory");
                 // }
-                check_thread.join();
+                if(check_thread.joinable())check_thread.join();
                 if (step < partitions - 1) {
                     check_thread = std::thread(check_blocking,
                                                std::ref(recv_queue_mutex),
@@ -2844,12 +2838,13 @@ public:
                     size_t buffer_size =
                         (i == partition_id)
                             ? used_buffer[s_i]->count
-                            : length_array[partition_id][i][s_i];   // send_buffer[i][s_i]->count 第i个host
-                                                                    // s_i个socket的buffersize
+                            : length_array[partition_id][i]
+                                          [s_i];   // send_buffer[i][s_i]->count 第i个host
+                                                   // s_i个socket的buffersize
 #else
                     size_t buffer_size =
                         used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
-                                                   // s_i个socket的buffersize    
+                                                   // s_i个socket的buffersize
 #endif
                     for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
                         // 确定每个线程负责buffer的哪个部分,每个socket内的线程分工，不同socket的线程可能处理同样的任务
@@ -2945,7 +2940,7 @@ public:
                 for (int step = 1; step < partitions; step++) {
                     int i = (partition_id - step + partitions) % partitions;
                     // 怎么判断这个节点需不需要工作窃取
-                    if(!waiting) break;
+                    if (!waiting) break;
                     __sync_fetch_and_add(&stealingss[i], 1);
                     //  stealings[i]++;
 #    pragma omp parallel reduction(+ : reducer)
@@ -2986,9 +2981,9 @@ public:
                                         local_reducer += sparse_slot(
                                             v_i,
                                             msg_data,
-                                            VertexAdjList<EdgeData>(   
-                                                
-                                                        gim_outgoing_adj_list[i][s_i] +
+                                            VertexAdjList<EdgeData>(
+
+                                                gim_outgoing_adj_list[i][s_i] +
                                                     gim_outgoing_adj_index[i][s_i][v_i],
                                                 gim_outgoing_adj_list[i][s_i] +
                                                     gim_outgoing_adj_index[i][s_i][v_i + 1]),
@@ -3004,11 +2999,10 @@ public:
                     __sync_fetch_and_add(&stealingss[i], -1);
                 }
 #endif
-
+            }
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
             comm_thread.join();
 #endif
-            }
             // 全局工作窃取
             // TODO: fix socket
             // #ifdef GLOBAL_STEALING_SPRASE
@@ -3260,7 +3254,7 @@ public:
                 recv_queue_size += 1;
                 recv_queue_mutex.unlock();
             });
-#endif            
+#endif
             current_send_part_id = partition_id;
             for (int step = 0; step < partitions; step++) {
                 current_send_part_id = (current_send_part_id + 1) % partitions;
@@ -3408,7 +3402,7 @@ public:
             int expected_partition = partition_id + 1;
             // 标记有接收自己的消息
             completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
-#endif            
+#endif
             // dense_slot
             for (int step = 0; step < partitions; step++) {
 #ifdef DENSE_MODE_UNIDIRECTIONAL
@@ -3454,14 +3448,11 @@ public:
                     }
                     int s_j = get_socket_offset(t_i);
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-                    size_t buffer_size =
-                        (i == partition_id)
-                            ? used_buffer[s_i]->count
-                            : length_array[partition_id][i]
-                                          [s_i];
+                    size_t buffer_size = (i == partition_id) ? used_buffer[s_i]->count
+                                                             : length_array[partition_id][i][s_i];
 #else
                     size_t buffer_size = used_buffer[s_i]->count;
-#endif                                          
+#endif
                     VertexId partition_size = buffer_size;
                     thread_state[t_i]->curr =
                         partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
@@ -3503,7 +3494,7 @@ public:
 #else
             send_thread.join();
             recv_thread.join();
-#endif        
+#endif
             delete[] send_queue;
             delete[] recv_queue;
         }
