@@ -13,8 +13,9 @@ add_definitions(-DSTATISTICS)
 # add_definitions(-DGLOBAL_STEALING_SPRASE)
 # add_definitions(-DGLOBAL_STEALING_DENSE)
 # add_definitions(-DGLOBAL_STEALING_VERTICES)
+
 # add_definitions(-DSPARSE_MODE_UNIDIRECTIONAL)
-add_definitions(-DDENSE_MODE_UNIDIRECTIONAL)
+# add_definitions(-DDENSE_MODE_UNIDIRECTIONAL)
 
 set(CMAKE_CXX_FLAGS " -w -fsanitize=address -fno-sanitize=leak  -std=c++17 -g -fopenmp -march=native")
 set(TARGETS bc bfs cc pagerank sssp )
