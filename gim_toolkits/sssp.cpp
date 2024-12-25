@@ -79,17 +79,31 @@ void compute(Graph<Weight> * graph, VertexId root) {
             }
         },
         [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
-            Weight msg = 1e9;
-            for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                VertexId src = ptr->neighbour;
-                // if (active_in->get_bit(src)) {
-                Weight relax_dist = distance[src] + ptr->edge_data;
-                if (relax_dist < msg) {
-                    msg = relax_dist;
+            if(partition_id==-1){
+                Weight msg = 1e9;
+                for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                    VertexId src = ptr->neighbour;
+                    // if (active_in->get_bit(src)) {
+                    Weight relax_dist = distance[src] + ptr->edge_data;
+                    if (relax_dist < msg) {
+                        msg = relax_dist;
+                    }
+                    // }
                 }
-                // }
+                if (msg < 1e9) graph->emit(dst, msg);
+            }else{
+                Weight msg = 1e9;
+                for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                    VertexId src = ptr->neighbour;
+                    // if (active_in->get_bit(src)) {
+                    Weight relax_dist = global_distance[partition_id][src] + ptr->edge_data;
+                    if (relax_dist < msg) {
+                        msg = relax_dist;
+                    }
+                    // }
+                }
+                if (msg < 1e9) graph->emit_other(dst, msg,partition_id);
             }
-            if (msg < 1e9) graph->emit(dst, msg);
         },
         [&](VertexId dst, Weight msg) {
             if (msg < distance[dst]) {
