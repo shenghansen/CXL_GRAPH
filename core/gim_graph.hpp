@@ -2671,6 +2671,7 @@ public:
             for (int t_i = 0; t_i < threads; t_i++) {
                 flush_local_send_buffer<M>(t_i);
             }
+            // 此时current_send_part_id的send_buffer准备好了
             process_edge_time[0] = MPI_Wtime() + stream_time;
 
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
@@ -2679,6 +2680,7 @@ public:
                     int i = (partition_id - step + partitions) %
                             partitions;   // 确保i进程是除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {
+                        // memcpy的读操作是线程安全的
                         memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
                                gim_send_buffer[partition_id][partition_id][s_i]->data,
                                sizeof(MsgUnit<M>) *
