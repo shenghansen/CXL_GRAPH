@@ -128,7 +128,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 return 1;
             },
             active_out);
-            #else
+#else
         active_vertices = graph->process_vertices_global<VertexId>(   // 用来标记点访问过了
             [&](VertexId vtx, int partition_id) {
                 if (partition_id == -1) {
@@ -144,7 +144,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
         levels.push_back(active_out);
         global_levels.push_back(global_active_out);
         active_in = active_out;
-        global_active_in=global_active_out;
+        global_active_in = global_active_out;
     }
 
     double* inv_num_paths = num_paths;
@@ -167,16 +167,15 @@ void compute(Graph<Empty>* graph, VertexId root) {
 #else
     graph->process_vertices_global<VertexId>(
         [&](VertexId vtx, int partition_id) {
-            if(partition_id==-1){
+            if (partition_id == -1) {
                 inv_num_paths[vtx] = 1 / num_paths[vtx];
                 dependencies[vtx] = 0;
                 return 1;
-            }else{
+            } else {
                 global_num_paths[partition_id][vtx] = 1 / global_num_paths[partition_id][vtx];
                 global_dependencies[partition_id][vtx] = 0;
                 return 1;
             }
-            
         },
         global_active_all);
     visited->clear();
@@ -194,7 +193,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
         },
         global_levels.back());
 #endif
-    
+
 
     graph->transpose();
     // if (graph->partition_id == 0) {
@@ -252,19 +251,18 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 return 1;
             },
             levels.back());
-            #else
+#else
         graph->process_vertices_global<VertexId>(
-            [&](VertexId vtx,int partition_id) {
-                if(partition_id==-1){
+            [&](VertexId vtx, int partition_id) {
+                if (partition_id == -1) {
                     visited->set_bit(vtx);
                     dependencies[vtx] += inv_num_paths[vtx];
                     return 1;
-                }else{
+                } else {
                     global_visited[partition_id]->set_bit(vtx);
                     global_dependencies[partition_id][vtx] += global_num_paths[partition_id][vtx];
                     return 1;
                 }
-                
             },
             global_levels.back());
 #endif
@@ -301,8 +299,8 @@ void compute(Graph<Empty>* graph, VertexId root) {
     graph->gather_vertex_array(dependencies, 0);
     graph->gather_vertex_array(inv_num_paths, 0);
     if (graph->partition_id == 0) {
-        for (VertexId v_i=0;v_i<20;v_i++) {
-          printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
+        for (VertexId v_i = 0; v_i < 20; v_i++) {
+            printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
         }
     }
 

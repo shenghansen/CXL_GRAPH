@@ -20,8 +20,9 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include "core/gim_graph.hpp"
 
 double exec_time = 0;
+std::vector<double> times;
 void compute(Graph<Empty> * graph, VertexId root) {
-    // double exec_time = 0;
+     exec_time = 0;
     exec_time -= get_time();
 
     // VertexId* parent = graph->alloc_vertex_array<VertexId>();
@@ -51,9 +52,11 @@ void compute(Graph<Empty> * graph, VertexId root) {
     VertexId active_vertices = 1;
 
     for (int i_i = 0; active_vertices > 0; i_i++) {
+#ifdef SHOW_RESULT
         if (graph->partition_id==0) {
           printf("active(%d)>=%u\n", i_i, active_vertices);
         }
+        #endif
         active_out->clear();
         active_vertices = graph->process_edges<VertexId, VertexId>(
             [&](VertexId src) { graph->emit(src, src); },
@@ -137,12 +140,13 @@ void compute(Graph<Empty> * graph, VertexId root) {
         std::swap(global_active_in, global_active_out);
     }
   exec_time += get_time();
+  times.push_back(exec_time);
   // if (graph->partition_id==0) {
   //   printf("exec_time=%lf(s)\n", exec_time);
   // }
-  printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
+//   printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
   graph->gather_vertex_array(parent, 0);
-
+#ifdef SHOW_RESULT
   if (graph->partition_id==0) {
     VertexId found_vertices = 0;
     for (VertexId v_i=0;v_i<graph->vertices;v_i++) {
@@ -152,7 +156,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
     }
     printf("found_vertices = %u\n", found_vertices);
   }
-
+#endif
   graph->dealloc_vertex_array(parent);
   delete active_in;
   delete active_out;
@@ -170,16 +174,22 @@ int main(int argc, char ** argv) {
   Graph<Empty> * graph;
   graph = new Graph<Empty>();
   VertexId root = std::atoi(argv[3]);
-  double load_time = 0;
-  load_time -= get_time();
   graph->load_directed(argv[1], std::atoi(argv[2]));
-  printf("load complete\n");
-  load_time += get_time();
-  // printf("load_time=%lf(s)\n", load_time);
-  compute(graph, root);
+  for (size_t i = 0; i < EXEC_TIMES; i++) {
+      compute(graph, root);
+  }
+  double average_time = 0;
+  for (auto i : times) {
+      average_time += i;
+  }
+  average_time /= EXEC_TIMES;
+
+  if (graph->partition_id == 0) {
+      printf("exec_time=%lf(s)\n", exec_time);
+  }
   printf("partiton_id: %d, total_process_time  =%lf(s)\n",
          graph->get_partition_id(),
-         graph->print_total_process_time());
+         graph->print_total_process_time() / EXEC_TIMES);
   // for (int run=0;run<5;run++) {
   //   compute(graph, root);
   // }

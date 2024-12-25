@@ -24,8 +24,9 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 
 const double d = (double)0.85;
 double exec_time = 0;
+std::vector<double> times;
 void compute(Graph<Empty>* graph, int iterations) {
-
+    exec_time = 0;
     exec_time -= get_time();
     double** global_curr = graph->alloc_global_vertex_array<double>();
     double** global_next = graph->alloc_global_vertex_array<double>();
@@ -72,9 +73,11 @@ void compute(Graph<Empty>* graph, int iterations) {
         #endif
     delta /= graph->vertices;
     for (int i_i = 0; i_i < iterations; i_i++) {
+#ifdef SHOW_RESULT
         if (graph->partition_id==0) {
           printf("delta(%d)=%lf\n", i_i, delta);
         }
+        #endif
         graph->fill_vertex_array(next, (double)0);
         //稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
         graph->process_edges<int, double>(
@@ -115,7 +118,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return 0;
                 },
                 active);
-                #else
+#else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
                     if(partition_id==-1){
@@ -127,7 +130,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return 0;
                 },
                 global_active);
-                #endif
+#endif
         } else {
 #ifndef GLOBAL_STEALING_VERTICES
             delta = graph->process_vertices<double>(
@@ -140,7 +143,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     return fabs(next[vtx] - curr[vtx]);
                 },
                 active);
-                #else
+#else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
                     if(partition_id==-1){
@@ -165,7 +168,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     
                 },
                 global_active);
-                #endif
+#endif
         }
         delta /= graph->vertices;
         std::swap(curr, next);
@@ -173,26 +176,29 @@ void compute(Graph<Empty>* graph, int iterations) {
     }
 
     exec_time += get_time();
+    times.push_back(exec_time);
     // if (graph->partition_id==0) {
     //   printf("exec_time=%lf(s)\n", exec_time);
     // }
-    printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
+    // printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
 #ifndef GLOBAL_STEALING_VERTICES
     double pr_sum =
         graph->process_vertices<double>([&](VertexId vtx) { return curr[vtx]; }, active);
-        #else
+#else
     double pr_sum = graph->process_vertices_global<double>(
         [&](VertexId vtx, int partition_id) { if(partition_id==-1){
             return curr[vtx];
         }else{
             return global_curr[partition_id][vtx];
         } }, global_active);
-        #endif
+#endif
+#ifdef SHOW_RESULT
     if (graph->partition_id == 0) {
         printf("pr_sum=%lf\n", pr_sum);
     }
 
     graph->gather_vertex_array(curr, 0);
+
     if (graph->partition_id == 0) {
         VertexId max_v_i = 0;
         for (VertexId v_i = 0; v_i < graph->vertices; v_i++) {
@@ -200,7 +206,7 @@ void compute(Graph<Empty>* graph, int iterations) {
         }
         printf("pr[%u]=%lf\n", max_v_i, curr[max_v_i]);
     }
-
+#endif
     graph->dealloc_vertex_array(curr);
     graph->dealloc_vertex_array(next);
     delete active;
@@ -220,16 +226,25 @@ int main(int argc, char** argv) {
     Graph<Empty>* graph;
     graph = new Graph<Empty>();
     graph->load_directed(argv[1], std::atoi(argv[2]));
-    printf("load complete\n");
     int iterations = std::atoi(argv[3]);
+    for (size_t i = 0; i < EXEC_TIMES; i++) {
+        compute(graph, iterations);
+    }
+    double average_time = 0;
+    for (auto i : times) {
+        average_time += i;
+    }
+    average_time /= EXEC_TIMES;
 
-    compute(graph, iterations);
+    if (graph->partition_id == 0) {
+        printf("exec_time=%lf(s)\n", exec_time);
+    }
     printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
-           graph->print_total_process_time());
+           graph->print_total_process_time() / EXEC_TIMES);
     // for (int run=0;run<5;run++) {
     //   compute(graph, iterations);
     // }
     delete graph;
     return 0;
-}
+    }

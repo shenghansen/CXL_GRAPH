@@ -20,6 +20,10 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #    define UNIDIRECTIONAL_MODE
 #endif
 
+#ifndef EXEC_TIMES
+#    define EXEC_TIMES 10
+#endif
+
 #include <atomic>
 #include <cstddef>
 #include <fcntl.h>
@@ -1252,6 +1256,13 @@ public:
         std::swap(tuned_chunks_dense, tuned_chunks_sparse);
         std::swap(compressed_outgoing_adj_vertices, compressed_incoming_adj_vertices);
         std::swap(compressed_outgoing_adj_index, compressed_incoming_adj_index);
+        /* gim */
+        std::swap(gim_out_degree, gim_in_degree);
+        std::swap(gim_outgoing_adj_index, gim_incoming_adj_index);
+        std::swap(gim_outgoing_adj_bitmap, gim_incoming_adj_bitmap);
+        std::swap(gim_outgoing_adj_list, gim_incoming_adj_list);
+        std::swap(gim_compressed_outgoing_adj_index, gim_compressed_incoming_adj_index);
+
     }
 
     // load a directed graph from path

@@ -21,129 +21,148 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include "mpi.h"
 
 typedef float Weight;
-  double exec_time = 0;
-void compute(Graph<Weight> * graph, VertexId root) {
+double exec_time = 0;
+std::vector<double> times;
+void compute(Graph<Weight>* graph, VertexId root) {
+    exec_time = 0;
+    exec_time -= get_time();
 
-  exec_time -= get_time();
+    // Weight * distance = graph->alloc_vertex_array<Weight>();
+    // VertexSubset * active_in = graph->alloc_vertex_subset();
+    // VertexSubset * active_out = graph->alloc_vertex_subset();
+    Weight** global_distance = graph->alloc_global_vertex_array<Weight>();
+    VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
+    VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
+    Weight* distance = global_distance[graph->partition_id];
+    VertexSubset* active_in = global_active_in[graph->partition_id];
+    VertexSubset* active_out = global_active_out[graph->partition_id];
+    MPI_Barrier(MPI_COMM_WORLD);
+    active_in->clear();
+    active_in->set_bit(root);
+    graph->fill_vertex_array(distance, (Weight)1e9);
+    distance[root] = (Weight)0;
+    VertexId active_vertices = 1;
 
-  // Weight * distance = graph->alloc_vertex_array<Weight>();
-  // VertexSubset * active_in = graph->alloc_vertex_subset();
-  // VertexSubset * active_out = graph->alloc_vertex_subset();
-  Weight** global_distance = graph->alloc_global_vertex_array<Weight>();
-  VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
-  VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
-  Weight* distance = global_distance[graph->partition_id];
-  VertexSubset* active_in = global_active_in[graph->partition_id];
-  VertexSubset* active_out = global_active_out[graph->partition_id];
-  MPI_Barrier(MPI_COMM_WORLD);
-  active_in->clear();
-  active_in->set_bit(root);
-  graph->fill_vertex_array(distance, (Weight)1e9);
-  distance[root] = (Weight)0;
-  VertexId active_vertices = 1;
-  
-  for (int i_i=0;active_vertices>0;i_i++) {
-    if (graph->partition_id==0) {
-      printf("active(%d)>=%u\n", i_i, active_vertices);
-    }
-    active_out->clear();
-    active_vertices = graph->process_edges<VertexId, Weight>(
-        [&](VertexId src) { graph->emit(src, distance[src]); },
-        [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj, int partition_id) {
-            if(partition_id==-1){
-                VertexId activated = 0;
-                for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    Weight relax_dist = msg + ptr->edge_data;
-                    if (relax_dist < distance[dst]) {
-                        if (write_min(&distance[dst], relax_dist)) {
-                            active_out->set_bit(dst);
-                            activated += 1;
+    for (int i_i = 0; active_vertices > 0; i_i++) {
+#ifdef SHOW_RESULT
+        if (graph->partition_id == 0) {
+            printf("active(%d)>=%u\n", i_i, active_vertices);
+        }
+        #endif
+        active_out->clear();
+        active_vertices = graph->process_edges<VertexId, Weight>(
+            [&](VertexId src) { graph->emit(src, distance[src]); },
+            [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj, int partition_id) {
+                if (partition_id == -1) {
+                    VertexId activated = 0;
+                    for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end;
+                         ptr++) {
+                        VertexId dst = ptr->neighbour;
+                        Weight relax_dist = msg + ptr->edge_data;
+                        if (relax_dist < distance[dst]) {
+                            if (write_min(&distance[dst], relax_dist)) {
+                                active_out->set_bit(dst);
+                                activated += 1;
+                            }
                         }
                     }
-                }
-                return activated;
-            }else{
-                VertexId activated = 0;
-                for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    Weight relax_dist = msg + ptr->edge_data;
-                    if (relax_dist < global_distance[partition_id][dst]) {
-                        if (write_min(&global_distance[partition_id][dst], relax_dist)) {
-                            global_active_out[partition_id]->set_bit(dst);
-                            activated += 1;
+                    return activated;
+                } else {
+                    VertexId activated = 0;
+                    for (AdjUnit<Weight>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end;
+                         ptr++) {
+                        VertexId dst = ptr->neighbour;
+                        Weight relax_dist = msg + ptr->edge_data;
+                        if (relax_dist < global_distance[partition_id][dst]) {
+                            if (write_min(&global_distance[partition_id][dst], relax_dist)) {
+                                global_active_out[partition_id]->set_bit(dst);
+                                activated += 1;
+                            }
                         }
                     }
+                    return activated;
                 }
-                return activated;
-            }
-        },
-        [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
-            Weight msg = 1e9;
-            for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                VertexId src = ptr->neighbour;
-                // if (active_in->get_bit(src)) {
-                Weight relax_dist = distance[src] + ptr->edge_data;
-                if (relax_dist < msg) {
-                    msg = relax_dist;
+            },
+            [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
+                Weight msg = 1e9;
+                for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                    VertexId src = ptr->neighbour;
+                    // if (active_in->get_bit(src)) {
+                    Weight relax_dist = distance[src] + ptr->edge_data;
+                    if (relax_dist < msg) {
+                        msg = relax_dist;
+                    }
+                    // }
                 }
-                // }
-            }
-            if (msg < 1e9) graph->emit(dst, msg);
-        },
-        [&](VertexId dst, Weight msg) {
-            if (msg < distance[dst]) {
-                write_min(&distance[dst], msg);
-                active_out->set_bit(dst);
-                return 1;
-            }
-            return 0;
-        },
-        active_in);
-    std::swap(active_in, active_out);
-    std::swap(global_active_in, global_active_out);
-  }
-
-  exec_time += get_time();
-  // if (graph->partition_id==0) {
-  //   printf("exec_time=%lf(s)\n", exec_time);
-  // }
-  printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(),exec_time);
-  graph->gather_vertex_array(distance, 0);
-  if (graph->partition_id==0) {
-    VertexId max_v_i = root;
-    for (VertexId v_i=0;v_i<graph->vertices;v_i++) {
-      if (distance[v_i] < 1e9 && distance[v_i] > distance[max_v_i]) {
-        max_v_i = v_i;
-      }
+                if (msg < 1e9) graph->emit(dst, msg);
+            },
+            [&](VertexId dst, Weight msg) {
+                if (msg < distance[dst]) {
+                    write_min(&distance[dst], msg);
+                    active_out->set_bit(dst);
+                    return 1;
+                }
+                return 0;
+            },
+            active_in);
+        std::swap(active_in, active_out);
+        std::swap(global_active_in, global_active_out);
     }
-    printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
-  }
 
-  graph->dealloc_vertex_array(distance);
-  delete active_in;
-  delete active_out;
+    exec_time += get_time();
+    // if (graph->partition_id == 0) {
+    //     printf("exec_time=%lf(s)\n", exec_time);
+    // }
+    times.push_back(exec_time);
+    // printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(),exec_time);
+    graph->gather_vertex_array(distance, 0);
+#ifdef SHOW_RESULT
+    if (graph->partition_id == 0) {
+        VertexId max_v_i = root;
+        for (VertexId v_i = 0; v_i < graph->vertices; v_i++) {
+            if (distance[v_i] < 1e9 && distance[v_i] > distance[max_v_i]) {
+                max_v_i = v_i;
+            }
+        }
+        printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
+    }
+#endif
+    graph->dealloc_vertex_array(distance);
+    delete active_in;
+    delete active_out;
 }
 
-int main(int argc, char ** argv) {
-  MPI_Instance mpi(&argc, &argv);
+int main(int argc, char** argv) {
+    MPI_Instance mpi(&argc, &argv);
 
-  if (argc<4) {
-    printf("sssp [file] [vertices] [root]\n");
-    exit(-1);
-  }
+    if (argc < 4) {
+        printf("sssp [file] [vertices] [root]\n");
+        exit(-1);
+    }
 
-  Graph<Weight> * graph;
-  graph = new Graph<Weight>();
-  graph->load_directed(argv[1], std::atoi(argv[2]));
-  VertexId root = std::atoi(argv[3]);
+    Graph<Weight>* graph;
+    graph = new Graph<Weight>();
+    graph->load_directed(argv[1], std::atoi(argv[2]));
+    VertexId root = std::atoi(argv[3]);
+    for (size_t i = 0; i < EXEC_TIMES; i++) {
+        compute(graph, root);
+    }
+    double average_time = 0;
+    for (auto i : times) {
+        average_time += i;
+    }
+    average_time /= EXEC_TIMES;
 
-  compute(graph, root);
-  printf("partiton_id: %d, total_process_time  =%lf(s)\n",graph->get_partition_id(), graph->print_total_process_time());
-  // for (int run=0;run<5;run++) {
-  //   compute(graph, root);
-  // }
+    if (graph->partition_id == 0) {
+        printf("exec_time=%lf(s)\n", exec_time);
+    }
+    printf("partiton_id: %d, total_process_time  =%lf(s)\n",
+           graph->get_partition_id(),
+           graph->print_total_process_time() / EXEC_TIMES);
+    // for (int run=0;run<5;run++) {
+    //   compute(graph, root);
+    // }
 
-  delete graph;
-  return 0;
+    delete graph;
+    return 0;
 }
