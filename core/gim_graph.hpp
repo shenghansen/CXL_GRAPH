@@ -267,6 +267,7 @@ public:
     VertexId** gim_out_degree;
     VertexId** gim_in_degree;
     /* global stealing */
+    size_t*** send_count;
 
     /* single comm*/
     std::atomic<bool>**** completion_tags;   //  bool* [partitions][partitions][sockets]; numa-aware
@@ -509,13 +510,15 @@ public:
         }
         gim_send_buffer = new GIMMessageBuffer***[partitions];
         gim_recv_buffer = new GIMMessageBuffer***[partitions];
+        send_count=new size_t**[partitions];
 #ifdef UNIDIRECTIONAL_MODE
-        completion_tags = new std::atomic<bool>***[partitions];
+            completion_tags = new std::atomic<bool>***[partitions];
         length_array = new size_t**[partitions];
 #endif
         for (int i = 0; i < partitions; i++) {
             gim_send_buffer[i] = new GIMMessageBuffer**[partitions];
             gim_recv_buffer[i] = new GIMMessageBuffer**[partitions];
+            send_count[i]=new size_t*[partitions];
 #ifdef UNIDIRECTIONAL_MODE
             completion_tags[i] = new std::atomic<bool>**[partitions];
             length_array[i] = new size_t*[partitions];
@@ -523,6 +526,7 @@ public:
             for (size_t j = 0; j < partitions; j++) {
                 gim_send_buffer[i][j] = new GIMMessageBuffer*[sockets];
                 gim_recv_buffer[i][j] = new GIMMessageBuffer*[sockets];
+                send_count[i][j]=(size_t*)cxl_shm->GIM_malloc(sizeof(size_t) * sockets, i);
 #ifdef UNIDIRECTIONAL_MODE
                 completion_tags[i][j] = new std::atomic<bool>*[sockets];
                 length_array[i][j] = (size_t*)cxl_shm->GIM_malloc(sizeof(size_t) * sockets, i);
@@ -537,6 +541,7 @@ public:
                     gim_recv_buffer[i][j][s_i] = new GIMMessageBuffer(cxl_shm, i, s_i);
                     gim_recv_buffer[i][j][s_i]->init(sizeof(MsgUnit<double>) * max_owned_vertices *
                                                      sockets);
+                    send_count[i][j][s_i]=0;
 #ifdef UNIDIRECTIONAL_MODE
                     // 实际上是已经分配好了一个gim，然后再把对应的位置指针返回，并没有每次都malloc
                     completion_tags[i][j][s_i] =
@@ -2479,7 +2484,7 @@ public:
     template<typename M> void flush_local_send_buffer(int t_i) {
         int s_i = get_socket_id(t_i);   // 线程在那个socket
         int pos = __sync_fetch_and_add(
-            &gim_send_buffer[partition_id][current_send_part_id][s_i]->count,
+            &send_count[partition_id][current_send_part_id][s_i],
             local_send_buffer[t_i]
                 ->count);   // 通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
         memcpy(gim_send_buffer[partition_id][current_send_part_id][s_i]->data +
@@ -2505,12 +2510,12 @@ public:
     // need rewrite current_send_part_id ,make it shared
     template<typename M> void flush_local_send_buffer_to_other(int t_i, int id) {
         int s_i = get_socket_id(t_i);   // 线程在那个socket
-        printf("%d steal %d current part%d\n",
-               partition_id,
-               id,
-               global_current_send_part_id[id].load());
+        // printf("%d steal %d current part%d\n",
+        //        partition_id,
+        //        id,
+        //        global_current_send_part_id[id].load());
         int pos = __sync_fetch_and_add(
-            &gim_send_buffer[id][global_current_send_part_id[id]][s_i]->count,
+            &send_count[id][global_current_send_part_id[id]][s_i],
             local_send_buffer[t_i]
                 ->count);   // 通过faa找到全局的send_buffer[current_send_part_id] [t_i]的指针
         memcpy(gim_send_buffer[id][global_current_send_part_id[id]][s_i]->data +
@@ -2579,6 +2584,7 @@ public:
                     gim_send_buffer[partition_id][partition_id][s_i]->resize(
                         sizeof(MsgUnit<M>) * owned_vertices *
                         sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                    send_count[partition_id][i][s_i] = 0;
                     gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
 
@@ -2611,6 +2617,7 @@ public:
                     gim_send_buffer[partition_id][partition_id][s_i]->resize(
                         sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
                         sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                    send_count[partition_id][i][s_i] = 0;
                     gim_send_buffer[partition_id][i][s_i]->count = 0;
                     gim_recv_buffer[partition_id][i][s_i]->count = 0;
                     recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
@@ -2675,19 +2682,17 @@ public:
                         memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
                                gim_send_buffer[partition_id][partition_id][s_i]->data,
                                sizeof(MsgUnit<M>) *
-                                   gim_send_buffer[partition_id][partition_id][s_i]->count);
+                                   send_count[partition_id][partition_id][s_i]);
                         // if(sizeof(MsgUnit<M>)
-                        // *gim_send_buffer[partition_id][partition_id][s_i]->count>0)
+                        // *send_count[partition_id][partition_id][s_i]>0)
 
                         // ll_DMA_memcpy((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
                         //                 (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
                         //                 sizeof(MsgUnit<M>) *
-                        // gim_send_buffer[partition_id][partition_id][s_i]->count,partition_id );
+                        // send_count[partition_id][partition_id][s_i],partition_id );
 
                         length_array[i][partition_id][s_i] =
-                            gim_send_buffer[partition_id][partition_id][s_i]->count;
-                        // gim_recv_buffer[i][partition_id][s_i]->count =
-                        // gim_send_buffer[partition_id][partition_id][s_i]->count;
+                            send_count[partition_id][partition_id][s_i];
                         completion_tags[i][partition_id][s_i]->store(true,
                                                                      std::memory_order_release);
                     }
@@ -2716,8 +2721,7 @@ public:
                         //          MPI_COMM_WORLD);
 
                         MPI_Send(gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                 sizeof(MsgUnit<M>) *
-                                     gim_send_buffer[partition_id][partition_id][s_i]->count,
+                                 sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i],
                                  MPI_CHAR,
                                  i,
                                  PassMessage,
@@ -2725,7 +2729,7 @@ public:
                         // gim_comm->GIM_Send(
                         //     gim_send_buffer[partition_id][partition_id][s_i]->data,
                         //     sizeof(MsgUnit<M>) *
-                        //         gim_send_buffer[partition_id][partition_id][s_i]->count,
+                        //         send_count[partition_id][partition_id][s_i],
                         //     i,
                         //     0,
                         //     gim_recv_buffer[i][partition_id][s_i]->data);
@@ -2837,14 +2841,16 @@ public:
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
                     size_t buffer_size =
                         (i == partition_id)
-                            ? used_buffer[s_i]->count
+                            ? send_count[partition_id][partition_id][s_i]
                             : length_array[partition_id][i]
                                           [s_i];   // send_buffer[i][s_i]->count 第i个host
                                                    // s_i个socket的buffersize
 #else
                     size_t buffer_size =
-                        used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
-                                                   // s_i个socket的buffersize
+                        (i == partition_id)
+                            ? send_count[partition_id][partition_id][s_i]
+                            : used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
+                                                         // s_i个socket的buffersize
 #endif
                     for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
                         // 确定每个线程负责buffer的哪个部分,每个socket内的线程分工，不同socket的线程可能处理同样的任务
@@ -3147,10 +3153,9 @@ public:
                     for (int s_i = 0; s_i < sockets; s_i++) {
                         memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
                                gim_send_buffer[partition_id][i][s_i]->data,
-                               sizeof(MsgUnit<M>) * gim_send_buffer[partition_id][i][s_i]->count);
+                               sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
 
-                        length_array[i][partition_id][s_i] =
-                            gim_send_buffer[partition_id][i][s_i]->count;
+                        length_array[i][partition_id][s_i] = send_count[partition_id][i][s_i];
                         completion_tags[i][partition_id][s_i]->store(true,
                                                                      std::memory_order_release);
                     }
@@ -3180,14 +3185,14 @@ public:
                         //          PassMessage,
                         //          MPI_COMM_WORLD);
                         MPI_Send(gim_send_buffer[partition_id][i][s_i]->data,
-                                 sizeof(MsgUnit<M>) * gim_send_buffer[partition_id][i][s_i]->count,
+                                 sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
                                  MPI_CHAR,
                                  i,
                                  PassMessage,
                                  MPI_COMM_WORLD);
                         // gim_comm->GIM_Send(
                         //     gim_send_buffer[partition_id][i][s_i]->data,
-                        //     sizeof(MsgUnit<M>) * gim_send_buffer[partition_id][i][s_i]->count,
+                        //     sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
                         //     i,
                         //     0,
                         //     gim_recv_buffer[i][partition_id][s_i]->data);
@@ -3331,10 +3336,10 @@ public:
                 }
                 // 确保其他节点窃取的任务完成
                 while (stealingss[partition_id] != 0) {
-                    printf("stealings:%d ,send_part:%d.%d\n",
-                           stealingss[partition_id],
-                           current_send_part_id,
-                           global_current_send_part_id[partition_id].load());
+                    // printf("stealings:%d ,send_part:%d.%d\n",
+                    //        stealingss[partition_id],
+                    //        current_send_part_id,
+                    //        global_current_send_part_id[partition_id].load());
                     __asm volatile("pause" ::: "memory");
                 }
                 // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
@@ -3448,10 +3453,13 @@ public:
                     }
                     int s_j = get_socket_offset(t_i);
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-                    size_t buffer_size = (i == partition_id) ? used_buffer[s_i]->count
-                                                             : length_array[partition_id][i][s_i];
+                    size_t buffer_size = (i == partition_id)
+                                             ? send_count[partition_id][partition_id][s_i]
+                                             : length_array[partition_id][i][s_i];
 #else
-                    size_t buffer_size = used_buffer[s_i]->count;
+                    size_t buffer_size = (i == partition_id)
+                                             ? send_count[partition_id][i][s_i]
+                                             : used_buffer[s_i]->count;
 #endif
                     VertexId partition_size = buffer_size;
                     thread_state[t_i]->curr =
@@ -3516,7 +3524,7 @@ public:
         }
 #endif
         if (is_first && partition_id == 0) {
-            printf_data_info();
+            // printf_data_info();
             is_first = false;
         }
         return global_reducer;
