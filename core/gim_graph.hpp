@@ -1252,6 +1252,12 @@ public:
         std::swap(tuned_chunks_dense, tuned_chunks_sparse);
         std::swap(compressed_outgoing_adj_vertices, compressed_incoming_adj_vertices);
         std::swap(compressed_outgoing_adj_index, compressed_incoming_adj_index);
+        /* gim */
+        std::swap(gim_out_degree, gim_in_degree);
+        std::swap(gim_outgoing_adj_index, gim_incoming_adj_index);
+        std::swap(gim_outgoing_adj_bitmap, gim_incoming_adj_bitmap);
+        std::swap(gim_outgoing_adj_list, gim_incoming_adj_list);
+        std::swap(gim_compressed_outgoing_adj_index, gim_compressed_incoming_adj_index);
     }
 
     // load a directed graph from path
@@ -1634,8 +1640,8 @@ public:
         compressed_outgoing_adj_index = new CompressedAdjIndexUnit*[sockets];
         size_t compressed_outgoing_adj_index_size = 0;
         size_t outgoing_adj_list_size = 0;
-        for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历每个numa
-            outgoing_edges[s_i] = 0;                // 每个numa numa的出边数
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            outgoing_edges[s_i] = 0;   // 每个numa numa的出边数
             compressed_outgoing_adj_vertices[s_i] = 0;
             for (VertexId v_i = 0; v_i < vertices; v_i++) {   // 遍历所有的点
                 if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
@@ -1643,10 +1649,42 @@ public:
                     compressed_outgoing_adj_vertices[s_i] += 1;            // 有出边的点数
                 }
             }
+        }
+        int max_compressed_outgoing_adj_vertices = 0;
+        for (size_t i = 0; i < sockets; i++) {
+            max_compressed_outgoing_adj_vertices =
+                max_compressed_outgoing_adj_vertices > compressed_outgoing_adj_vertices[i]
+                    ? max_compressed_outgoing_adj_vertices
+                    : compressed_outgoing_adj_vertices[i];
+        }
+    int global_max=0;
+        MPI_Allreduce(&max_compressed_outgoing_adj_vertices,
+                      &global_max,
+                      1,
+                      MPI_INT,
+                      MPI_MAX,
+                      MPI_COMM_WORLD);
+        gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_outgoing_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_outgoing_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        (global_max + 1) * sizeof(CompressedAdjIndexUnit));
+                // gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(
+                //     global_max*unit_size);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        compressed_outgoing_adj_index = gim_compressed_outgoing_adj_index[partition_id];
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历每个numa
+
             // for simulate
-            compressed_outgoing_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                sizeof(CompressedAdjIndexUnit) * (compressed_outgoing_adj_vertices[s_i] + 1),
-                s_i + partition_id * NUMA);
+            // compressed_outgoing_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+            //     sizeof(CompressedAdjIndexUnit) * (compressed_outgoing_adj_vertices[s_i] + 1),
+            //     s_i + partition_id * NUMA);
             compressed_outgoing_adj_index_size +=
                 sizeof(CompressedAdjIndexUnit) * (compressed_outgoing_adj_vertices[s_i] + 1);
             compressed_outgoing_adj_index[s_i][0].index = 0;
@@ -1697,7 +1735,7 @@ public:
             max_out_going_edges =
                 max_out_going_edges > outgoing_edges[i] ? max_out_going_edges : outgoing_edges[i];
         }
-        int global_max;
+         
         MPI_Allreduce(&max_out_going_edges, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
 
 
@@ -2195,7 +2233,7 @@ public:
             printf("preprocessing cost: %.2lf (s)\n", prep_time);
         }
 #endif
-    }
+        }
 
     // 为线程分配chunk工作块，确定每个线程负责哪些点
     void tune_chunks() {

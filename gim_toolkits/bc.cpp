@@ -100,16 +100,30 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if (visited->get_bit(dst)) return;
-                double sum = 0;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    if (active_in->get_bit(src)) {
-                        sum += num_paths[src];
+                if(partition_id==-1){
+                    if (visited->get_bit(dst)) return;
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (active_in->get_bit(src)) {
+                            sum += num_paths[src];
+                        }
                     }
-                }
-                if (sum > 0) {
-                    graph->emit(dst, sum);
+                    if (sum > 0) {
+                        graph->emit(dst, sum);
+                    }
+                }else{
+                    if (global_visited[partition_id]->get_bit(dst)) return;
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (global_active_in[partition_id]->get_bit(src)) {
+                            sum += global_num_paths[partition_id][src];
+                        }
+                    }
+                    if (sum > 0) {
+                        graph->emit_other(dst, sum,partition_id);
+                    }
                 }
             },
             [&](VertexId dst, double msg) {
@@ -223,15 +237,27 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if (visited->get_bit(dst)) return;
-                double sum = 0;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    if (levels.back()->get_bit(src)) {
-                        sum += dependencies[src];
+                if(partition_id==-1){
+                    if (visited->get_bit(dst)) return;
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (levels.back()->get_bit(src)) {
+                            sum += dependencies[src];
+                        }
                     }
+                    graph->emit(dst, sum);
+                }else{
+                    if (global_visited[partition_id]->get_bit(dst)) return;
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        if (global_levels.back()[partition_id]->get_bit(src)) {
+                            sum += global_dependencies[partition_id][src];
+                        }
+                    }
+                    graph->emit_other(dst, sum,partition_id);
                 }
-                graph->emit(dst, sum);
             },
             [&](VertexId dst, double msg) {
                 if (!visited->get_bit(dst)) {

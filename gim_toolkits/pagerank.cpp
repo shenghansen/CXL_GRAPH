@@ -95,12 +95,21 @@ void compute(Graph<Empty>* graph, int iterations) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                double sum = 0;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    sum += curr[src];
+                if(partition_id==-1){
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        sum += curr[src];
+                    }
+                    graph->emit(dst, sum);
+                }else{
+                    double sum = 0;
+                    for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                        VertexId src = ptr->neighbour;
+                        sum += global_curr[partition_id][src];
+                    }
+                    graph->emit_other(dst, sum,partition_id);
                 }
-                graph->emit(dst, sum);
             },
             [&](VertexId dst, double msg) {
                 write_add(&next[dst], msg);
