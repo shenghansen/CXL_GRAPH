@@ -22,8 +22,9 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 
 #define COMPACT 0
 double exec_time = 0;
+std::vector<double> times;
 void compute(Graph<Empty>* graph, VertexId root) {
-
+    exec_time = 0;
     exec_time -= get_time();
 
     // double * num_paths = graph->alloc_vertex_array<double>();
@@ -64,9 +65,11 @@ void compute(Graph<Empty>* graph, VertexId root) {
         // printf("forward\n");
     }
     for (i_i = 0; active_vertices > 0; i_i++) {
+#ifdef SHOW_RESULT
         if (graph->partition_id == 0) {
             printf("active(%d)>=%u\n", i_i, active_vertices);
         }
+        #endif
         VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
         MPI_Barrier(MPI_COMM_WORLD);
         // VertexSubset* active_out = graph->alloc_vertex_subset();
@@ -318,17 +321,20 @@ void compute(Graph<Empty>* graph, VertexId root) {
     graph->transpose();
 
     exec_time += get_time();
+    times.push_back(exec_time);
     // if (graph->partition_id==0) {
     //   printf("exec_time=%lf(s)\n", exec_time);
     // }
-    printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
+    // printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
     graph->gather_vertex_array(dependencies, 0);
     graph->gather_vertex_array(inv_num_paths, 0);
+#ifdef SHOW_RESULT
     if (graph->partition_id == 0) {
         for (VertexId v_i = 0; v_i < 20; v_i++) {
             printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
         }
     }
+    #endif
 
     graph->dealloc_vertex_array(dependencies);
     graph->dealloc_vertex_array(inv_num_paths);
@@ -548,7 +554,9 @@ int main(int argc, char** argv) {
 #if COMPACT
     compute_compact(graph, root);
 #else
-    compute(graph, root);
+    for (size_t i = 0; i < EXEC_TIMES; i++) {
+        compute(graph, root);
+    }
 #endif
     // for (int run=0;run<5;run++) {
     //   #if COMPACT
@@ -557,9 +565,18 @@ int main(int argc, char** argv) {
     //   compute(graph, root);
     //   #endif
     // }
+    double average_time = 0;
+    for (auto i : times) {
+        average_time += i;
+    }
+    average_time /= EXEC_TIMES;
+
+    if (graph->partition_id == 0) {
+        printf("exec_time=%lf(s)\n", exec_time);
+    }
     printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
-           graph->print_total_process_time());
+           graph->print_total_process_time() / EXEC_TIMES);
     delete graph;
     return 0;
 }

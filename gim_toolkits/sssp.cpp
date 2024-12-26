@@ -48,7 +48,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
         if (graph->partition_id == 0) {
             printf("active(%d)>=%u\n", i_i, active_vertices);
         }
-        #endif
+#endif
         active_out->clear();
         active_vertices = graph->process_edges<VertexId, Weight>(
             [&](VertexId src) { graph->emit(src, distance[src]); },
@@ -84,9 +84,10 @@ void compute(Graph<Weight>* graph, VertexId root) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
-                if(partition_id==-1){
-                Weight msg = 1e9;
-                    for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+                if (partition_id == -1) {
+                    Weight msg = 1e9;
+                    for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
+                         ptr++) {
                         VertexId src = ptr->neighbour;
                         // if (active_in->get_bit(src)) {
                         Weight relax_dist = distance[src] + ptr->edge_data;
@@ -96,20 +97,21 @@ void compute(Graph<Weight>* graph, VertexId root) {
                         // }
                     }
                     if (msg < 1e9) graph->emit(dst, msg);
-                }else{
-                Weight msg = 1e9;
-                for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    // if (active_in->get_bit(src)) {
-                    Weight relax_dist = global_distance[partition_id][src] + ptr->edge_data;
-                    if (relax_dist < msg) {
-                        msg = relax_dist;
+                } else {
+                    Weight msg = 1e9;
+                    for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
+                         ptr++) {
+                        VertexId src = ptr->neighbour;
+                        // if (active_in->get_bit(src)) {
+                        Weight relax_dist = global_distance[partition_id][src] + ptr->edge_data;
+                        if (relax_dist < msg) {
+                            msg = relax_dist;
+                        }
+                        // }
                     }
-                    // }
+                    if (msg < 1e9) graph->emit_other(dst, msg, partition_id);
                 }
-                if (msg < 1e9) graph->emit_other(dst, msg,partition_id);
-            }
-        },
+            },
             [&](VertexId dst, Weight msg) {
                 if (msg < distance[dst]) {
                     write_min(&distance[dst], msg);
@@ -123,25 +125,26 @@ void compute(Graph<Weight>* graph, VertexId root) {
         std::swap(global_active_in, global_active_out);
     }
 
-  exec_time += get_time();
-  // if (graph->partition_id==0) {
-  //   printf("exec_time=%lf(s)\n", exec_time);
-  // }
-  printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(),exec_time);
-  graph->gather_vertex_array(distance, 0);
-  if (graph->partition_id==0) {
-    VertexId max_v_i = root;
-    for (VertexId v_i=0;v_i<graph->vertices;v_i++) {
-      if (distance[v_i] < 1e9 && distance[v_i] > distance[max_v_i]) {
-        max_v_i = v_i;
-      }
+    exec_time += get_time();
+    // if (graph->partition_id==0) {
+    //   printf("exec_time=%lf(s)\n", exec_time);
+    // }
+    // printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
+    graph->gather_vertex_array(distance, 0);
+#ifdef SHOW_RESULT
+    if (graph->partition_id == 0) {
+        VertexId max_v_i = root;
+        for (VertexId v_i = 0; v_i < graph->vertices; v_i++) {
+            if (distance[v_i] < 1e9 && distance[v_i] > distance[max_v_i]) {
+                max_v_i = v_i;
+            }
+        }
+        printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
     }
-    printf("distance[%u]=%f\n", max_v_i, distance[max_v_i]);
-  }
-
-  graph->dealloc_vertex_array(distance);
-  delete active_in;
-  delete active_out;
+#endif
+    graph->dealloc_vertex_array(distance);
+    delete active_in;
+    delete active_out;
 }
 
 int main(int argc, char** argv) {
