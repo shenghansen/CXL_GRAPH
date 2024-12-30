@@ -42,6 +42,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <queue>
 
 #include "bitmap.hpp"
 #include "communicate.h"
@@ -2756,14 +2757,17 @@ public:
                         // 有没有可能send_buffer本来就是0，那么length_array本来就是0
                     }
                 }
-                // std::vector<int> pending_buffer;
 
+#ifdef GET
+                // std::vector<int> pending_buffer;
+                // std::queue<int> pending_buffer;
                 // 自己的任务结束了，开始get操作
                 for (int step = 1; step < partitions; step++) {
                     int i = (partition_id - step + partitions) % partitions;
                     // 首先判断是否available
                     if (!available[i][i].load()) {
                         // 先记录下来
+                        // pending_buffer.push(i);
                         // pending_buffer.push_back(i);
                         continue;
                     }
@@ -2780,7 +2784,6 @@ public:
                     }
                 }
 
-                // 测下来会更慢
                 // for(auto i : pending_buffer){
                 //     while(!available[i][i].load()){
                 //         __asm volatile("pause" ::: "memory");
@@ -2797,6 +2800,74 @@ public:
                 //         }
                 //     }
                 // }
+
+                // while(!pending_buffer.empty()){
+                //     int i = pending_buffer.front();
+                //     pending_buffer.pop();
+                //     if (!available[i][i].load()) {
+                //         pending_buffer.push(i);
+                //         continue;
+                //     }
+                //     for (int s_i = 0; s_i < sockets; s_i++) {
+                //         if (send_count[i][i][s_i] &&
+                //             !__sync_val_compare_and_swap(
+                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                //                    gim_send_buffer[i][i][s_i]->data,
+                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                //             completion_tags[partition_id][i][s_i]->store(true,
+                //                                                          std::memory_order_release);
+                //         }
+                //     }
+                // }
+
+
+                // std::queue<int> ready_tasks;
+                // std::queue<int> waiting_tasks;
+
+                // while (true) {
+                //     // 锁住共享资源
+                //     std::unique_lock<std::mutex> lock(mtx);
+
+                //     // 检查队列中哪些任务可以处理
+                //     while (!pending_buffer.empty()) {
+                //         int task = pending_buffer.front();
+                //         pending_buffer.pop();
+
+                //         if (available[task][task].load()) {
+                //             ready_tasks.push(task);
+                //         } else {
+                //             waiting_tasks.push(task);
+                //         }
+                //     }
+
+                //     // 如果没有任务可以处理，阻塞等待通知
+                //     if (ready_tasks.empty()) {
+                //         cv.wait(lock, [&]() {
+                //             return std::any_of(waiting_tasks.begin(), waiting_tasks.end(), [&](int task) {
+                //                 return available[task][task].load();
+                //             });
+                //         });
+                //     }
+
+                //     // 释放锁后处理任务
+                //     lock.unlock();
+
+                //     // 处理就绪任务
+                //     while (!ready_tasks.empty()) {
+                //         int task = ready_tasks.front();
+                //         ready_tasks.pop();
+                //         // 处理任务逻辑
+                //     }
+
+                //     // 将未准备好的任务重新加入队列
+                //     std::lock_guard<std::mutex> relock(mtx);
+                //     while (!waiting_tasks.empty()) {
+                //         pending_buffer.push(waiting_tasks.front());
+                //         waiting_tasks.pop();
+                //     }
+                // }
+#endif
             });
 
             int expected_partition = partition_id + 1;
@@ -3263,12 +3334,15 @@ public:
                         }
                     }
                 }
+#ifdef GET
                 // std::vector<int> pending_buffer;
+                // std::queue<int> pending_buffer;
                 for (int step = 1; step < partitions; step++) {
                     int i = (partition_id - step + partitions) % partitions;
                     // 首先判断是否available
                     if (!available[i][partition_id].load()) {
                         // 先记录下来
+                        // pending_buffer.push(i);
                         // pending_buffer.push_back(i);
                         continue;
                     }
@@ -3302,6 +3376,27 @@ public:
                 //         }
                 //     }
                 // }
+
+                // while(!pending_buffer.empty()){
+                //     int i = pending_buffer.front();
+                //     pending_buffer.pop();
+                //     if (!available[i][i].load()) {
+                //         pending_buffer.push(i);
+                //         continue;
+                //     }
+                //     for (int s_i = 0; s_i < sockets; s_i++) {
+                //         if (send_count[i][i][s_i] &&
+                //             !__sync_val_compare_and_swap(
+                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                //                    gim_send_buffer[i][i][s_i]->data,
+                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                //             completion_tags[partition_id][i][s_i]->store(true,
+                //                                                          std::memory_order_release);
+                //         }
+                //     }
+                // }
+#endif            
             });
 #else
             std::thread send_thread([&]() {
