@@ -9,7 +9,8 @@ find_package(MPI REQUIRED)
 add_subdirectory("Gimulator")
 
 add_definitions(-DSTATISTICS)
-
+# add_definitions(-DEXEC_TIMES=10)
+# add_definitions(-DSHOW_RESULT)
 # add_definitions(-DGLOBAL_STEALING_SPRASE)
 # add_definitions(-DGLOBAL_STEALING_DENSE)
 # add_definitions(-DGLOBAL_STEALING_VERTICES)
