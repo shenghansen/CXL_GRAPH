@@ -23,6 +23,9 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #ifndef EXEC_TIMES
 #    define EXEC_TIMES 10
 #endif
+// #define DMA_SIZE 4194304u
+#define DMA_SIZE 8388608u
+// #define DMA_SIZE 0
 
 #include <atomic>
 #include <cstddef>
@@ -40,13 +43,13 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <functional>
 #include <mutex>
 #include <pthread.h>
+#include <queue>
 #include <sched.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <queue>
 
 #include "bitmap.hpp"
 #include "communicate.h"
@@ -142,6 +145,9 @@ struct GIMMessageBuffer {
         capacity = size;
         // data = (char*)malloc(capacity);
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
+        if(mlock(data,size)!= 0){
+            ERROR("mlock faid");
+        }
     }
     void resize(size_t new_capacity) {
         if (new_capacity > capacity) {
@@ -279,6 +285,16 @@ public:
     std::atomic<bool>**** completion_tags;   //  bool* [partitions][partitions][sockets]; numa-aware
     size_t*** length_array;
     std::atomic<bool>** available;
+    // VertexId* process_data_size;
+    size_t* process_data_size;
+    // int* indices;
+
+    double comm_time = 0;
+    double idle_time = 0;
+
+    /* for testing get */
+    std::vector<int> sequence;
+    std::vector<int> success;
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -519,6 +535,9 @@ public:
         gim_recv_buffer = new GIMMessageBuffer***[partitions];
         send_count = new size_t**[partitions];
         finished = new int*[partitions];
+        // process_data_size = new VertexId[partitions];
+        process_data_size = new size_t[partitions];
+        // indices = new int[partitions-1];
 
 #ifdef UNIDIRECTIONAL_MODE
         completion_tags = new std::atomic<bool>***[partitions];
@@ -568,6 +587,28 @@ public:
     }
 
     double print_total_process_time() { return total_process_time; }
+
+    double print_comm_time() { return comm_time; }
+
+    void print_get_sequence(){
+        for(auto i: sequence){
+            printf("%d ",i);
+        }
+        printf("\n");
+        for(auto i: success){
+            printf("%d ",i);
+        }
+        printf("\n");
+        sequence.clear();
+        success.clear();
+    }
+
+    void print_process_data(){
+        for(int i=0;i<partitions;i++){
+            printf("%d ",process_data_size[i]);
+        }
+        printf("\n");
+    }
     // fill a vertex array with a specific value
     template<typename T> void fill_vertex_array(T* array, T value) {
 #pragma omp parallel for
@@ -2597,6 +2638,7 @@ public:
         std::function<R(VertexId, M)> dense_slot, Bitmap* active,
         Bitmap* dense_selective = nullptr) {
         double stream_time = 0;
+
         stream_time -= MPI_Wtime();
         for (int i = 0; i < 4; i++) {
             process_edge_time[i] = 0;
@@ -2617,7 +2659,7 @@ public:
         // if (partition_id == 0) printf("spare:%d\n", sparse);
         size_t send_buffer_size = 0;
         size_t recv_buffer_size = 0;
-        finished[partition_id][0]=0;
+        finished[partition_id][0] = 0;
         if (sparse) {
             for (int i = 0; i < partitions; i++) {   // 稀疏模式每个host要向外发送数据
                 for (int s_i = 0; s_i < sockets; s_i++) {
@@ -2698,10 +2740,26 @@ public:
         // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
         // }
         size_t basic_chunk = 64;
-#if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
+// #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
+        // MPI_Allgather(
+        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T, MPI_COMM_WORLD);
+        // 创建 indices 数组并填充
+        // std::vector<int> indices;
+        // for (int i = 0; i < partitions; i++) {
+        //     if (i == partition_id) continue;
+        //     indices.push_back(i);
+        // }
+
+        // 使用 std::sort 对 indices 数组进行排序，使得 indices 按照 process_data_size
+        // 中的值从大到小排序
+        // std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+        //     return process_data_size[a] > process_data_size[b];   // 从大到小排序
+        // });
+
+        // INFO("process_data_size: {} {} {} {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
         // 初始化完成后再进行操作
-        MPI_Barrier(MPI_COMM_WORLD);
-#endif
+        // MPI_Barrier(MPI_COMM_WORLD);
+// #endif
         if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
             if (partition_id == 0) {
@@ -2736,13 +2794,59 @@ public:
             // 此时current_send_part_id的send_buffer准备好了
             available[partition_id][current_send_part_id].store(true, std::memory_order_release);
 #endif
+            // process_edge到目前为止的时间为止
             process_edge_time[0] = MPI_Wtime() + stream_time;
 
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
+            std::vector<int> indices;
+            for (int i = 0; i < partitions; i++) {
+                if (i == partition_id) continue;
+                indices.push_back(i);
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
+            // MPI_Allgather(
+            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size, 1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
+            // INFO("process_data_size: {} {} {} {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
+            std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+                // return process_data_size[a] > process_data_size[b];   // 从大到小排序
+                return send_count[a][a][0] > send_count[b][b][0];
+            });
+            // INFO("indices: {} {} {}",indices[0],indices[1],indices[2]);
+            MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
+#ifdef SPARSE_MODE_UNIDIRECTIONAL
             std::thread comm_thread([&]() {
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) %
-                            partitions;   // 确保i进程是除了自己以外的所有进程
+                // comm_time -= MPI_Wtime();
+                // for (int step = 1; step < partitions; step++) {
+                //     int i = (partition_id - step + partitions) %
+                //             partitions;   // 确保i进程是除了自己以外的所有进程
+                //     for (int s_i = 0; s_i < sockets; s_i++) {
+                //         // length_array == 0才进入if，但是不代表更新后的值不是0
+                //         if (!__sync_val_compare_and_swap(
+                //                 &length_array[i][partition_id][s_i],
+                //                 0,
+                //                 send_count[partition_id][partition_id][s_i])) {
+                //             // memcpy的读操作是线程安全的
+                //             memcpy(
+                //                 gim_recv_buffer[i][partition_id][s_i]->data,
+                //                 gim_send_buffer[partition_id][partition_id][s_i]->data,
+                //                 sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
+                //             // if(sizeof(MsgUnit<M>)
+                //             // *send_count[partition_id][partition_id][s_i]>0)
+
+                //             // hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
+                //             //                 (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                //             //                 sizeof(MsgUnit<M>) *
+                //             // send_count[partition_id][partition_id][s_i],partition_id );
+                //             completion_tags[i][partition_id][s_i]->store(true,
+                //                                                          std::memory_order_release);
+                //         }
+                //         // 有没有可能send_buffer本来就是0，那么length_array本来就是0
+                //     }
+                // }
+
+                for(int i : indices){
                     for (int s_i = 0; s_i < sockets; s_i++) {
                         // length_array == 0才进入if，但是不代表更新后的值不是0
                         if (!__sync_val_compare_and_swap(
@@ -2750,47 +2854,98 @@ public:
                                 0,
                                 send_count[partition_id][partition_id][s_i])) {
                             // memcpy的读操作是线程安全的
-                            memcpy(
+                            // memcpy(
+                            //     gim_recv_buffer[i][partition_id][s_i]->data,
+                            //     gim_send_buffer[partition_id][partition_id][s_i]->data,
+                            //     sizeof(MsgUnit<M>) *
+                            //     send_count[partition_id][partition_id][s_i]);
+                            if(send_count[partition_id][partition_id][s_i] > 0)
+
+                            //
+                            if(sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
+                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                                sizeof(MsgUnit<M>) *
+                                send_count[partition_id][partition_id][s_i],partition_id );
+                            else memcpy(
                                 gim_recv_buffer[i][partition_id][s_i]->data,
                                 gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
-                            // if(sizeof(MsgUnit<M>)
-                            // *send_count[partition_id][partition_id][s_i]>0)
-
-                            // ll_DMA_memcpy((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                            //                 (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                            //                 sizeof(MsgUnit<M>) *
-                            // send_count[partition_id][partition_id][s_i],partition_id );
+                                sizeof(MsgUnit<M>) *
+                                send_count[partition_id][partition_id][s_i]);
+                            // INFO("{} to {} SPARSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
                         }
-                        // 有没有可能send_buffer本来就是0，那么length_array本来就是0
                     }
                 }
 
-#ifdef GET
+#    ifdef GET
                 // std::vector<int> pending_buffer;
                 // std::queue<int> pending_buffer;
                 // 自己的任务结束了，开始get操作
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) % partitions;
-                    // 首先判断是否available
-                    if (!available[i][i].load()) {
-                        // 先记录下来
-                        // pending_buffer.push(i);
-                        // pending_buffer.push_back(i);
-                        continue;
-                    }
-                    for (int s_i = 0; s_i < sockets; s_i++) {
-                        if (send_count[i][i][s_i] &&
-                            !__sync_val_compare_and_swap(
-                                &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
-                            memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                   gim_send_buffer[i][i][s_i]->data,
-                                   sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                            completion_tags[partition_id][i][s_i]->store(true,
-                                                                         std::memory_order_release);
+                // for (int step = 1; step < partitions; step++) {
+                //     int i = (partition_id - step + partitions) % partitions;
+                //     // 首先判断是否available
+                //     if (!available[i][i].load()) {
+                //         // 先记录下来
+                //         // pending_buffer.push(i);
+                //         // pending_buffer.push_back(i);
+                //         continue;
+                //     }
+                //     for (int s_i = 0; s_i < sockets; s_i++) {
+                //         if (send_count[i][i][s_i] &&
+                //             !__sync_val_compare_and_swap(
+                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                //                    gim_send_buffer[i][i][s_i]->data,
+                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                //             completion_tags[partition_id][i][s_i]->store(true,
+                //                                                          std::memory_order_release);
+                //         }
+                //     }
+                // }
+
+                std::vector<bool> executed(partitions, false);
+                bool all_finished = false;
+                while(!all_finished){
+                    all_finished = true;
+                    for(int i : indices){
+                        if(executed[i]){
+                            continue;
                         }
+                        if(!available[i][i].load()){
+                            all_finished = false;
+                            continue;
+                        }
+                        // sequence.push_back(i);
+                        for (int s_i = 0; s_i < sockets; s_i++) {
+                            if (send_count[i][i][s_i] &&
+                                !__sync_val_compare_and_swap(
+                                    &length_array[partition_id][i][s_i], 0,
+                                    send_count[i][i][s_i])) {
+                                // memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                                //     gim_send_buffer[i][i][s_i]->data,
+                                //     sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                if(sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[i][i][s_i]->data,
+                                (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
+                                                sizeof(MsgUnit<M>) *
+                                send_count[i][i][s_i],partition_id );
+                                else memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                                    gim_send_buffer[i][i][s_i]->data,
+                                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                completion_tags[partition_id][i][s_i]->store(true,
+                                                                            std::memory_order_release);
+
+                                // INFO("{} from {} SPARSE GET SIZE IS  {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                // success.push_back(1);
+                            }else{
+                                // success.push_back(0);
+                            }
+                        }
+                        executed[i] = true;
+                        all_finished = false;
+                        break;
                     }
                 }
 
@@ -2854,7 +3009,8 @@ public:
                 //     // 如果没有任务可以处理，阻塞等待通知
                 //     if (ready_tasks.empty()) {
                 //         cv.wait(lock, [&]() {
-                //             return std::any_of(waiting_tasks.begin(), waiting_tasks.end(), [&](int task) {
+                //             return std::any_of(waiting_tasks.begin(), waiting_tasks.end(),
+                //             [&](int task) {
                 //                 return available[task][task].load();
                 //             });
                 //         });
@@ -2877,7 +3033,8 @@ public:
                 //         waiting_tasks.pop();
                 //     }
                 // }
-#endif
+#    endif
+                // comm_time += MPI_Wtime();
             });
 
             int expected_partition = partition_id + 1;
@@ -2922,7 +3079,9 @@ public:
                     int i = (partition_id + step) % partitions;   // 除了自己以外的所有进程
                     for (int s_i = 0; s_i < sockets; s_i++) {     // 遍历所有socket
                         MPI_Status recv_status;
+                        idle_time -= MPI_Wtime();
                         MPI_Probe(i, PassMessage, MPI_COMM_WORLD, &recv_status);
+                        idle_time += MPI_Wtime();
                         // MPI_Get_count(&recv_status, MPI_CHAR, &recv_buffer[i][s_i]->count);
                         // MPI_Recv(recv_buffer[i][s_i]->data,
                         //          recv_buffer[i][s_i]->count,
@@ -3260,6 +3419,7 @@ public:
             send_thread.join();
             recv_thread.join();
 #endif
+            // 发送线程和计算均结束的时候
             process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
             delete[] recv_queue;
         } else {
@@ -3322,6 +3482,7 @@ public:
 
 #ifdef DENSE_MODE_UNIDIRECTIONAL
             std::thread comm_thread([&] {
+                // comm_time -= MPI_Wtime();
                 for (int step = 0; step < partitions - 1; step++) {
                     while (true) {
                         send_queue_mutex.lock();
@@ -3335,40 +3496,51 @@ public:
                         if (!__sync_val_compare_and_swap(&length_array[i][partition_id][s_i],
                                                          0,
                                                          send_count[partition_id][i][s_i])) {
-                            memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                            // memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                            //        gim_send_buffer[partition_id][i][s_i]->data,
+                            //        sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+
+                            if(sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
+                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                                sizeof(MsgUnit<M>) *
+                                send_count[partition_id][i][s_i],partition_id );
+                            else   memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
                                    gim_send_buffer[partition_id][i][s_i]->data,
                                    sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                            // INFO("{} to {} DENSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
 
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
                         }
                     }
                 }
-#ifdef GET
+#    ifdef GET
                 // std::vector<int> pending_buffer;
                 // std::queue<int> pending_buffer;
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) % partitions;
-                    // 首先判断是否available
-                    if (!available[i][partition_id].load()) {
-                        // 先记录下来
-                        // pending_buffer.push(i);
-                        // pending_buffer.push_back(i);
-                        continue;
-                    }
-                    for (int s_i = 0; s_i < sockets; s_i++) {
-                        if (send_count[i][partition_id][s_i] &&
-                            !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
-                                                         0,
-                                                         send_count[i][partition_id][s_i])) {
-                            memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                   gim_send_buffer[i][partition_id][s_i]->data,
-                                   sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                            completion_tags[partition_id][i][s_i]->store(true,
-                                                                         std::memory_order_release);
-                        }
-                    }
-                }
+                // for (int step = 1; step < partitions; step++) {
+                //     int i = (partition_id - step + partitions) % partitions;
+                //     // 首先判断是否available
+                //     if (!available[i][partition_id].load()) {
+                //         // 先记录下来
+                //         pending_buffer.push(i);
+                //         // pending_buffer.push_back(i);
+                //         continue;
+                //     }
+                //     for (int s_i = 0; s_i < sockets; s_i++) {
+                //         if (send_count[i][partition_id][s_i] &&
+                //             !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
+                //                                          0,
+                //                                          send_count[i][partition_id][s_i])) {
+                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                //                    gim_send_buffer[i][partition_id][s_i]->data,
+                //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             completion_tags[partition_id][i][s_i]->store(true,
+                //                                                          std::memory_order_release);
+                //         }
+                //     }
+                // }
 
                 // for(auto i: pending_buffer){
                 //     while(!available[i][partition_id].load()){
@@ -3377,7 +3549,8 @@ public:
                 //     for (int s_i = 0; s_i < sockets; s_i++) {
                 //         if (send_count[i][partition_id][s_i] &&
                 //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][partition_id][s_i])) {
+                //                 &length_array[partition_id][i][s_i], 0,
+                //                 send_count[i][partition_id][s_i])) {
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                 //                    gim_send_buffer[i][partition_id][s_i]->data,
                 //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
@@ -3390,23 +3563,25 @@ public:
                 // while(!pending_buffer.empty()){
                 //     int i = pending_buffer.front();
                 //     pending_buffer.pop();
-                //     if (!available[i][i].load()) {
+                //     if (!available[i][partition_id].load()) {
                 //         pending_buffer.push(i);
                 //         continue;
                 //     }
                 //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][i][s_i] &&
+                //         if (send_count[i][partition_id][s_i] &&
                 //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+                //                 &length_array[partition_id][i][s_i], 0, send_count[i][partition_id][s_i])) {
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][i][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                //                    gim_send_buffer[i][partition_id][s_i]->data,
+                //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
                 //             completion_tags[partition_id][i][s_i]->store(true,
                 //                                                          std::memory_order_release);
                 //         }
                 //     }
                 // }
-#endif            
+#    endif
+                // comm_time += MPI_Wtime();
             });
 #else
             std::thread send_thread([&]() {
@@ -3593,8 +3768,8 @@ public:
                 }
 #ifdef DENSE_MODE_UNIDIRECTIONAL
                 // send_count已经完成
-                available[partition_id][current_send_part_id].store(true,
-                                                                    std::memory_order_release);
+                // available[partition_id][current_send_part_id].store(true,
+                //                                                     std::memory_order_release);
 #endif
 
                 // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
@@ -3829,7 +4004,9 @@ public:
         process_edge_time[3] = MPI_Wtime() - process_edge_time[2] + stream_time;
 
         stream_time += MPI_Wtime();
+        // 就是开始到目前结束的时间
         total_process_time += stream_time;
+
         // printf("partition_id: %d,process_edges took %lf (s)\n",partition_id, stream_time);
         // printf("partition_id: %d,spare slot: %lf (s) ,spare signal :%lf (s),dense signal: %lf
         // (s),dense slot: %lf (s)\n",partition_id,

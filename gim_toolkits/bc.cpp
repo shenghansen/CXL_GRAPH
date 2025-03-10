@@ -68,7 +68,10 @@ void compute(Graph<Empty>* graph, VertexId root) {
 #ifdef SHOW_RESULT
         if (graph->partition_id == 0) {
             printf("active(%d)>=%u\n", i_i, active_vertices);
+            // graph->print_process_data();
         }
+        // printf("partition_id:%d, sequence:\n",graph->partition_id);
+        // graph->print_get_sequence();
         #endif
         VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
         MPI_Barrier(MPI_COMM_WORLD);
@@ -574,9 +577,10 @@ int main(int argc, char** argv) {
     if (graph->partition_id == 0) {
         printf("exec_time=%lf(s)\n", exec_time);
     }
-    printf("partiton_id: %d, total_process_time  =%lf(s)\n",
+    printf("partiton_id: %d, total_process_time  =%lf(s), comm_time  =%lf(s)\n",
            graph->get_partition_id(),
-           graph->print_total_process_time() / EXEC_TIMES);
+           graph->print_total_process_time() / EXEC_TIMES, 
+           graph->print_comm_time() / EXEC_TIMES);
     delete graph;
     return 0;
 }
