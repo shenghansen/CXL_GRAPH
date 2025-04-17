@@ -49,3 +49,8 @@ cc
 bfs
 pagerank
 sssp
+test.sh
+readLog.py
+run_batch.sh
+run.script
+memcpy

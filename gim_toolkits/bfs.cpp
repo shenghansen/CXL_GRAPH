@@ -190,10 +190,9 @@ int main(int argc, char ** argv) {
   if (graph->partition_id == 0) {
       printf("exec_time=%lf(s)\n", exec_time);
   }
-  printf("partiton_id: %d, total_process_time  =%lf(s), comm_time  =%lf(s)\n",
+  printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
-           graph->print_total_process_time() / EXEC_TIMES, 
-           graph->print_comm_time() / EXEC_TIMES);
+           graph->print_total_process_time() / EXEC_TIMES);
   // for (int run=0;run<5;run++) {
   //   compute(graph, root);
   // }
