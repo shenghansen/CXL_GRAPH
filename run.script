@@ -1,0 +1,27 @@
+#!/bin/bash
+commands=("./build/pagerank" "./build/bfs"  "./build/sssp" "./build/bc")
+args=( "../data/twitter-2010Bin 41652230 1" "../data/enwiki-2013in 4206785 1" "../data/uk-2007Bin 105896555 1"  "../data/rMat24Bin 16800000 1" "../data/rMat27Bin 134000000 1")
+#"./build/pagerank" "./build/bfs"  "./build/sssp"
+#"./build/cc"
+num_commands=${#commands[@]}
+num_args=${#args[@]}
+
+
+for ((i=0; i<$num_commands; i++)); do
+  for ((j=0; j<$num_args; j++)); do
+    command=${commands[$i]}
+    param=${args[$j]}
+    echo "run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores sudo  mpirun -np 4 --allow-run-as-root --map-by socket  $command $param"
+    OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores sudo mpirun --allow-run-as-root -np 4 --map-by socket $command $param
+  done
+done
+# echo "####################################################################"
+
+# for ((i=0; i<$num_commands; i++)); do
+#   for ((j=0; j<$num_args; j++)); do
+#     command=${cxl_commands[$i]}
+#     param=${args[$j]}
+#     echo "run: OMP_NUM_THREADS=48 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 2 --map-by socket $command $param"
+#      OMP_NUM_THREADS=48 OMP_PROC_BIND=true OMP_PLACES=cores  mpirun -np 2 --map-by socket $command $param
+#   done
+# done
