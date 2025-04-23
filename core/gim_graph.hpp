@@ -145,7 +145,7 @@ struct GIMMessageBuffer {
         capacity = size;
         // data = (char*)malloc(capacity);
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
-        if(mlock(data,size)!= 0){
+        if (mlock(data, size) != 0) {
             ERROR("mlock faid");
         }
     }
@@ -280,6 +280,8 @@ public:
     /* global stealing */
     size_t*** send_count;
     int** finished;
+    int** remaining_work;
+    int* total_work;
 
     /* single comm*/
     std::atomic<bool>**** completion_tags;   //  bool* [partitions][partitions][sockets]; numa-aware
@@ -538,6 +540,11 @@ public:
         // process_data_size = new VertexId[partitions];
         process_data_size = new size_t[partitions];
         // indices = new int[partitions-1];
+        remaining_work = new int*[partitions];
+        total_work = new int[partitions];
+        for (int i = 0; i < partitions; i++) {
+            total_work[i] = 0;
+        }
 
 #ifdef UNIDIRECTIONAL_MODE
         completion_tags = new std::atomic<bool>***[partitions];
@@ -549,6 +556,7 @@ public:
             gim_recv_buffer[i] = new GIMMessageBuffer**[partitions];
             send_count[i] = new size_t*[partitions];
             finished[i] = (int*)cxl_shm->GIM_malloc(sizeof(int) * 1, i);
+            remaining_work[i] = (int*)cxl_shm->GIM_malloc(sizeof(int) * 1, i);
 
 #ifdef UNIDIRECTIONAL_MODE
             completion_tags[i] = new std::atomic<bool>**[partitions];
@@ -590,22 +598,22 @@ public:
 
     double print_comm_time() { return comm_time; }
 
-    void print_get_sequence(){
-        for(auto i: sequence){
-            printf("%d ",i);
+    void print_get_sequence() {
+        for (auto i : sequence) {
+            printf("%d ", i);
         }
         printf("\n");
-        for(auto i: success){
-            printf("%d ",i);
+        for (auto i : success) {
+            printf("%d ", i);
         }
         printf("\n");
         sequence.clear();
         success.clear();
     }
 
-    void print_process_data(){
-        for(int i=0;i<partitions;i++){
-            printf("%d ",process_data_size[i]);
+    void print_process_data() {
+        for (int i = 0; i < partitions; i++) {
+            printf("%d ", process_data_size[i]);
         }
         printf("\n");
     }
@@ -2335,7 +2343,9 @@ public:
                     }   // 计算在该分区内剩余的边数，使用顶点 p_v_i
                         // 的相邻边索引之差得到边的数量，并将其累计到 remained_edges。alpha
                         // 是一个边的附加数量，可能用于任务平衡。
+                    total_work[i] += end_p_v_i - last_p_v_i;
                 }
+
                 tuned_chunks_dense[i][t_i].curr = last_p_v_i;
                 tuned_chunks_dense[i][t_i].end = last_p_v_i;   // 线程处理点的范围
                 remained_partitions = threads_per_socket - s_j;
@@ -2740,9 +2750,10 @@ public:
         // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
         // }
         size_t basic_chunk = 64;
-// #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
+        // #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
         // MPI_Allgather(
-        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T, MPI_COMM_WORLD);
+        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T,
+        //     MPI_COMM_WORLD);
         // 创建 indices 数组并填充
         // std::vector<int> indices;
         // for (int i = 0; i < partitions; i++) {
@@ -2756,10 +2767,11 @@ public:
         //     return process_data_size[a] > process_data_size[b];   // 从大到小排序
         // });
 
-        // INFO("process_data_size: {} {} {} {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
+        // INFO("process_data_size: {} {} {}
+        // {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
         // 初始化完成后再进行操作
         // MPI_Barrier(MPI_COMM_WORLD);
-// #endif
+        // #endif
         if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
             if (partition_id == 0) {
@@ -2805,8 +2817,10 @@ public:
             }
             MPI_Barrier(MPI_COMM_WORLD);
             // MPI_Allgather(
-            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size, 1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
-            // INFO("process_data_size: {} {} {} {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
+            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size,
+            //     1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
+            // INFO("process_data_size: {} {} {}
+            // {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
             std::sort(indices.begin(), indices.end(), [&](int a, int b) {
                 // return process_data_size[a] > process_data_size[b];   // 从大到小排序
                 return send_count[a][a][0] > send_count[b][b][0];
@@ -2831,12 +2845,14 @@ public:
                 //             memcpy(
                 //                 gim_recv_buffer[i][partition_id][s_i]->data,
                 //                 gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //                 sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
+                //                 sizeof(MsgUnit<M>) *
+                //                 send_count[partition_id][partition_id][s_i]);
                 //             // if(sizeof(MsgUnit<M>)
                 //             // *send_count[partition_id][partition_id][s_i]>0)
 
-                //             // hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //             //                 (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                //             //
+                //             hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
+                //             // (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
                 //             //                 sizeof(MsgUnit<M>) *
                 //             // send_count[partition_id][partition_id][s_i],partition_id );
                 //             completion_tags[i][partition_id][s_i]->store(true,
@@ -2846,7 +2862,7 @@ public:
                 //     }
                 // }
 
-                for(int i : indices){
+                for (int i : indices) {
                     for (int s_i = 0; s_i < sockets; s_i++) {
                         // length_array == 0才进入if，但是不代表更新后的值不是0
                         if (!__sync_val_compare_and_swap(
@@ -2859,20 +2875,27 @@ public:
                             //     gim_send_buffer[partition_id][partition_id][s_i]->data,
                             //     sizeof(MsgUnit<M>) *
                             //     send_count[partition_id][partition_id][s_i]);
-                            if(send_count[partition_id][partition_id][s_i] > 0)
+                            if (send_count[partition_id][partition_id][s_i] > 0)
 
-                            //
-                            if(sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][partition_id][s_i],partition_id );
-                            else memcpy(
-                                gim_recv_buffer[i][partition_id][s_i]->data,
-                                gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][partition_id][s_i]);
-                            // INFO("{} to {} SPARSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
+                                //
+                                if (sizeof(MsgUnit<M>) *
+                                        send_count[partition_id][partition_id][s_i] >
+                                    DMA_SIZE)
+                                    hl_DMA_memcpy_sync_test(
+                                        (uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]
+                                            ->data,
+                                        (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                        sizeof(MsgUnit<M>) *
+                                            send_count[partition_id][partition_id][s_i],
+                                        partition_id);
+                                else
+                                    memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                           gim_send_buffer[partition_id][partition_id][s_i]->data,
+                                           sizeof(MsgUnit<M>) *
+                                               send_count[partition_id][partition_id][s_i]);
+                            // INFO("{} to {} SPARSE PUT SIZE IS
+                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                            // send_count[partition_id][partition_id][s_i]);
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
                         }
@@ -2907,39 +2930,42 @@ public:
 
                 std::vector<bool> executed(partitions, false);
                 bool all_finished = false;
-                while(!all_finished){
+                while (!all_finished) {
                     all_finished = true;
-                    for(int i : indices){
-                        if(executed[i]){
+                    for (int i : indices) {
+                        if (executed[i]) {
                             continue;
                         }
-                        if(!available[i][i].load()){
+                        if (!available[i][i].load()) {
                             all_finished = false;
                             continue;
                         }
                         // sequence.push_back(i);
                         for (int s_i = 0; s_i < sockets; s_i++) {
                             if (send_count[i][i][s_i] &&
-                                !__sync_val_compare_and_swap(
-                                    &length_array[partition_id][i][s_i], 0,
-                                    send_count[i][i][s_i])) {
+                                !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
+                                                             0,
+                                                             send_count[i][i][s_i])) {
                                 // memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                                 //     gim_send_buffer[i][i][s_i]->data,
                                 //     sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                if(sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[i][i][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[i][i][s_i],partition_id );
-                                else memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                    gim_send_buffer[i][i][s_i]->data,
-                                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                completion_tags[partition_id][i][s_i]->store(true,
-                                                                            std::memory_order_release);
+                                if (sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
+                                    hl_DMA_memcpy_sync_test(
+                                        (uint8_t*)gim_send_buffer[i][i][s_i]->data,
+                                        (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
+                                        sizeof(MsgUnit<M>) * send_count[i][i][s_i],
+                                        partition_id);
+                                else
+                                    memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                                           gim_send_buffer[i][i][s_i]->data,
+                                           sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                completion_tags[partition_id][i][s_i]->store(
+                                    true, std::memory_order_release);
 
-                                // INFO("{} from {} SPARSE GET SIZE IS  {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                // INFO("{} from {} SPARSE GET SIZE IS
+                                // {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
                                 // success.push_back(1);
-                            }else{
+                            } else {
                                 // success.push_back(0);
                             }
                         }
@@ -3424,7 +3450,7 @@ public:
             delete[] recv_queue;
         } else {
             // dense selective bitmap
-            if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
+            if (dense_selective != nullptr && partitions > 1) {
                 double sync_time = 0;
                 sync_time -= get_time();
                 std::thread send_thread([&]() {
@@ -3500,15 +3526,19 @@ public:
                             //        gim_send_buffer[partition_id][i][s_i]->data,
                             //        sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
 
-                            if(sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][i][s_i],partition_id );
-                            else   memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
-                                   gim_send_buffer[partition_id][i][s_i]->data,
-                                   sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
-                            // INFO("{} to {} DENSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                            if (sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test(
+                                    (uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
+                                    (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                    sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
+                                    partition_id);
+                            else
+                                memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                       gim_send_buffer[partition_id][i][s_i]->data,
+                                       sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                            // INFO("{} to {} DENSE PUT SIZE IS
+                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                            // send_count[partition_id][i][s_i]);
 
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
@@ -3535,7 +3565,9 @@ public:
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                 //                    gim_send_buffer[i][partition_id][s_i]->data,
                 //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS
+                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                //             send_count[i][partition_id][s_i]);
                 //             completion_tags[partition_id][i][s_i]->store(true,
                 //                                                          std::memory_order_release);
                 //         }
@@ -3570,11 +3602,14 @@ public:
                 //     for (int s_i = 0; s_i < sockets; s_i++) {
                 //         if (send_count[i][partition_id][s_i] &&
                 //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][partition_id][s_i])) {
+                //                 &length_array[partition_id][i][s_i], 0,
+                //                 send_count[i][partition_id][s_i])) {
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                 //                    gim_send_buffer[i][partition_id][s_i]->data,
                 //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS
+                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                //             send_count[i][partition_id][s_i]);
                 //             completion_tags[partition_id][i][s_i]->store(true,
                 //                                                          std::memory_order_release);
                 //         }
@@ -3691,6 +3726,8 @@ public:
                 for (int t_i = 0; t_i < threads; t_i++) {
                     *thread_state[t_i] = tuned_chunks_dense[i][t_i];
                 }
+                *remaining_work[partition_id] = total_work[i];
+
                 // 每个点对邻居执行dense_signal
 #pragma omp parallel
                 {
@@ -3706,6 +3743,8 @@ public:
                         if (end_p_v_i > final_p_v_i) {
                             end_p_v_i = final_p_v_i;
                         }
+                        int work_size = end_p_v_i - begin_p_v_i;
+                        __sync_fetch_and_add(remaining_work[partition_id], -work_size);
                         for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                             VertexId v_i =
                                 compressed_incoming_adj_index[s_i][p_v_i]
@@ -3734,6 +3773,8 @@ public:
                             if (end_p_v_i > thread_state[t_i]->end) {
                                 end_p_v_i = thread_state[t_i]->end;
                             }
+                            int work_size = end_p_v_i - begin_p_v_i;
+                            __sync_fetch_and_add(remaining_work[partition_id], -work_size);
                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                                 VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
                                 dense_signal(
@@ -3788,6 +3829,15 @@ public:
 #ifdef GLOBAL_STEALING_DENSE
             bool stealing_flag = true;
             while (stealing_flag) {
+                for (int step = 1; step < partitions; step++) {
+                    int i = (partition_id - step + partitions) % partitions;
+                    int remain_partitions = (i-global_current_send_part_id[partition_id]+partitions)%partitions;
+                    if(remain_partitions==0&&remaining_work[i]<20){//执行到最后一个分区并且剩余点数小于阈值，认为这个节点完成了
+                        finished_partition++;
+                    }
+                    
+                }
+
                 int min = finished[partition_id][0];
                 int min_p = partition_id;
                 int finished_partition = 1;
@@ -3847,54 +3897,8 @@ public:
                 // stealings[i]--;
                 __sync_fetch_and_add(&stealingss[min_p], -1);
             }
-//             for (int step = 1; step < partitions; step++) {
-//                 int i = (partition_id - step + partitions) % partitions;
-//                 // 怎么判断这个节点需不需要工作窃取
-//                 if (global_current_send_part_id[i] == i) {
-//                     continue;
-//                 }
-//                 __sync_fetch_and_add(&stealingss[i], 1);
-//                 //  stealings[i]++;
-// #    pragma omp parallel
-//                 {
-//                     int thread_id = omp_get_thread_num();
 
-//                     for (int t_offset = 0; t_offset < threads; t_offset++) {
-//                         int t_i = (thread_id + t_offset) % threads;
-//                         int s_i = get_socket_id(t_i);
-//                         while (gim_thread_state[i][t_i]->status != STEALING) {
-//                             VertexId begin_p_v_i =
-//                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
-//                                 basic_chunk);
-//                             if (begin_p_v_i >= gim_thread_state[i][t_i]->end) break;
-//                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-//                             if (end_p_v_i > gim_thread_state[i][t_i]->end) {
-//                                 end_p_v_i = gim_thread_state[i][t_i]->end;
-//                             }
-//                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-//                                 VertexId v_i =
-//                                     gim_compressed_incoming_adj_index[i][s_i][p_v_i].vertex;
-//                                 dense_signal(
-//                                     v_i,
-//                                     VertexAdjList<EdgeData>(
-//                                         gim_incoming_adj_list[i][s_i] +
-//                                             gim_compressed_incoming_adj_index[i][s_i][p_v_i]
-//                                                 .index,   // s_i出边开始
-//                                         gim_incoming_adj_list[i][s_i] +
-//                                             gim_compressed_incoming_adj_index[i][s_i][p_v_i + 1]
-//                                                 .index),
-//                                     i);
-//                             }
-//                         }
-//                     }
-//                 }
-// #    pragma omp parallel for
-//                 for (int t_i = 0; t_i < threads; t_i++) {
-//                     flush_local_send_buffer_to_other<M>(t_i, i);
-//                 }
-//                 // stealings[i]--;
-//                 __sync_fetch_and_add(&stealingss[i], -1);
-//             }
+
 #endif
 
             process_edge_time[2] = MPI_Wtime() + stream_time;
