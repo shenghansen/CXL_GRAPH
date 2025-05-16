@@ -513,7 +513,7 @@ public:
         // send_buffer和recv_buffer是二维的，第一维分区，第二维socket，每个socket内的线程还有自己的local_send_buffer
         alpha = 8 * (partitions - 1);
         global_current_send_part_id =
-            (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partition_id);
+            (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partitions);
         stealings =
             (std::atomic<int>*)cxl_shm->CXL_SHM_malloc(sizeof(std::atomic<int>) * partitions);
         stealingss = (int*)cxl_shm->CXL_SHM_malloc(sizeof(int) * partitions);
@@ -2282,13 +2282,14 @@ public:
         delete[] recv_buffer;
         close(fin);
 
+        init_gim_buffer();
         transpose();
         tune_chunks();   // tuned_chunks_dense init
         transpose();     // exchange tuned_chunks_dense and tuned_chunks_sparse
         // tuned_chunks_sparse = tuned_chunks_dense
         tune_chunks();   // tuned_chunks_dense init
         // gim_buffer
-        init_gim_buffer();
+        
         prep_time += MPI_Wtime();
 
 #ifdef PRINT_DEBUG_MESSAGES
@@ -2378,14 +2379,15 @@ public:
                 }
             }
         }
-        // if(partition_id==0){
-        //   for (int i=0;i<partitions;i++){
-        //     for(int j=0;j<threads;j++){
-        //       printf("part:%d thread:%d curr:%d
-        //       end:%d\n",i,j,tuned_chunks_dense[i][j].curr,tuned_chunks_dense[i][j].end);
-        //     }
-        //   }
-        // }
+        
+        for (int step = 0; step < partitions; step++) {
+            int count=0;
+            for (int t_i = 0; t_i < threads; t_i++) {
+                count += tuned_chunks_dense[step][t_i].end - tuned_chunks_dense[step][t_i].curr;
+            }
+            total_work[step]=count;
+            // printf("count:%d,total_work:%d\n",count,total_work[step]);
+        }
     }
 
     // 对于acrive中的点执行process任务，启用了工作窃取
@@ -3727,6 +3729,7 @@ public:
                     *thread_state[t_i] = tuned_chunks_dense[i][t_i];
                 }
                 *remaining_work[partition_id] = total_work[i];
+                // printf("id:%d, remaining_work:%d\n", partition_id,*remaining_work[partition_id]);
 
                 // 每个点对邻居执行dense_signal
 #pragma omp parallel
@@ -3792,8 +3795,7 @@ public:
                         }
                     }
                 }
-
-                // 全部执行完后再flush
+                
 #pragma omp parallel for
                 for (int t_i = 0; t_i < threads; t_i++) {
                     flush_local_send_buffer<M>(t_i);
@@ -3801,12 +3803,12 @@ public:
 
                 // 确保其他节点窃取的任务完成
                 while (stealingss[partition_id] != 0) {
-                    // printf("stealings:%d ,send_part:%d.%d\n",
-                    //        stealingss[partition_id],
-                    //        current_send_part_id,
-                    //        global_current_send_part_id[partition_id].load());
                     __asm volatile("pause" ::: "memory");
                 }
+                // printf("after  id:%d, remaining_work:%d\n",
+                    //    partition_id,
+                    //    *remaining_work[partition_id]);
+                // 全部执行完后再flush
 #ifdef DENSE_MODE_UNIDIRECTIONAL
                 // send_count已经完成
                 // available[partition_id][current_send_part_id].store(true,
@@ -3827,75 +3829,102 @@ public:
             finished[partition_id][0] = partitions * THREDAS;
             // 全局工作窃取
 #ifdef GLOBAL_STEALING_DENSE
+            int stealing_threshold = basic_chunk * threads;
+            int working_node[partitions] ;
+            for(int i=0;i<partitions;i++){
+                working_node[i]=1;
+            }
+            working_node[partition_id] = 0;
             bool stealing_flag = true;
             while (stealing_flag) {
+                int max_work = 0;
+                int max_p = -1;
                 for (int step = 1; step < partitions; step++) {
                     int i = (partition_id - step + partitions) % partitions;
-                    int remain_partitions = (i-global_current_send_part_id[partition_id]+partitions)%partitions;
-                    if(remain_partitions==0&&remaining_work[i]<20){//执行到最后一个分区并且剩余点数小于阈值，认为这个节点完成了
-                        finished_partition++;
-                    }
-                    
-                }
-
-                int min = finished[partition_id][0];
-                int min_p = partition_id;
-                int finished_partition = 1;
-
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) % partitions;
-                    if (min > finished[i][0]) {
-                        min = finished[i][0];
-                        min_p = i;
-                    }
-                    if (finished[i][0] == finished[partition_id][0]) {
-                        finished_partition++;
-                    }
-                    if (finished_partition == partitions) {
-                        stealing_flag = false;
+                    if (working_node[i] == 0) continue;
+                    int remain_partitions =
+                        (i - global_current_send_part_id[i] + partitions) % partitions;
+                    // if(partition_id==0){
+                        // printf("id :%d,remain_partitions:%d,remaining_work[i]:%d\n",i,
+                        //        remain_partitions,
+                        //        *remaining_work[i]);
+                    // }
+                    if (remain_partitions == 0 && *remaining_work[i] < stealing_threshold) {
+                        working_node[i] = 0;
+                    } else if (*remaining_work[i] < stealing_threshold)
+                        continue;
+                    else {
+                        if (max_work < *remaining_work[i]) {
+                            max_work = *remaining_work[i];
+                            max_p = i;
+                        }
                     }
                 }
-                if (!stealing_flag) break;
-                __sync_fetch_and_add(&stealingss[min_p], 1);
-                //  stealings[i]++;
+                // if(*((__uint128_t*)working_node)==0)break;//改变节点数时这里要改
+                int finish_count=0;
+                for(int i=0;i<partitions;i++){
+                    finish_count += working_node[i];
+                }
+                if (finish_count == 0) break;
+                if (max_p==-1){
+                    // printf("max_p == -1\n");
+                    continue;
+                }
+                    // for (int step = 1; step < partitions; step++) {
+                    //     int i = (partition_id - step + partitions) % partitions;
+                    //     if (min > finished[i][0]) {
+                    //         min = finished[i][0];
+                    //         min_p = i;
+                    //     }
+                    //     if (finished[i][0] == finished[partition_id][0]) {
+                    //         finished_partition++;
+                    //     }
+                    //     if (finished_partition == partitions) {
+                    //         stealing_flag = false;
+                    //     }
+                    // }
+                    // if (!stealing_flag) break;
+                    __sync_fetch_and_add(&stealingss[max_p], 1);
+                    //  stealings[i]++;
 #    pragma omp parallel
                 {
                     int thread_id = omp_get_thread_num();
 
                     for (int t_offset = 0; t_offset < threads; t_offset++) {
                         int t_i = (thread_id + t_offset) % threads;
-                        while (gim_thread_state[min_p][t_i]->status != STEALING) {
+                        while (gim_thread_state[max_p][t_i]->status != STEALING) {
                             int s_i = get_socket_id(t_i);
                             VertexId begin_p_v_i = __sync_fetch_and_add(
-                                &gim_thread_state[min_p][t_i]->curr, basic_chunk);
-                            if (begin_p_v_i >= gim_thread_state[min_p][t_i]->end) break;
+                                &gim_thread_state[max_p][t_i]->curr, basic_chunk);
+                            if (begin_p_v_i >= gim_thread_state[max_p][t_i]->end) break;
                             VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                            if (end_p_v_i > gim_thread_state[min_p][t_i]->end) {
-                                end_p_v_i = gim_thread_state[min_p][t_i]->end;
+                            if (end_p_v_i > gim_thread_state[max_p][t_i]->end) {
+                                end_p_v_i = gim_thread_state[max_p][t_i]->end;
                             }
+                            int work_size = end_p_v_i - begin_p_v_i;
+                            __sync_fetch_and_add(remaining_work[max_p], -work_size);
                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                                 VertexId v_i =
-                                    gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].vertex;
+                                    gim_compressed_incoming_adj_index[max_p][s_i][p_v_i].vertex;
                                 dense_signal(
                                     v_i,
                                     VertexAdjList<EdgeData>(
-                                        gim_incoming_adj_list[min_p][s_i] +
-                                            gim_compressed_incoming_adj_index[min_p][s_i][p_v_i]
+                                        gim_incoming_adj_list[max_p][s_i] +
+                                            gim_compressed_incoming_adj_index[max_p][s_i][p_v_i]
                                                 .index,   // s_i出边开始
-                                        gim_incoming_adj_list[min_p][s_i] +
-                                            gim_compressed_incoming_adj_index[min_p][s_i][p_v_i + 1]
+                                        gim_incoming_adj_list[max_p][s_i] +
+                                            gim_compressed_incoming_adj_index[max_p][s_i][p_v_i + 1]
                                                 .index),
-                                    min_p);
+                                    max_p);
                             }
                         }
                     }
                 }
 #    pragma omp parallel for
                 for (int t_i = 0; t_i < threads; t_i++) {
-                    flush_local_send_buffer_to_other<M>(t_i, min_p);
+                    flush_local_send_buffer_to_other<M>(t_i, max_p);
                 }
-                // stealings[i]--;
-                __sync_fetch_and_add(&stealingss[min_p], -1);
+                __sync_fetch_and_add(&stealingss[max_p], -1);
             }
 
 

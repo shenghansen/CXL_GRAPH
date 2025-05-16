@@ -1,0 +1,55 @@
+# 忽略编译生成的文件
+*.o
+*.out
+
+# 忽略IDE和编辑器生成的文件
+.idea/
+.vscode/
+
+# 忽略依赖和构建工具生成的文件
+node_modules/
+build/
+dist/
+
+# 忽略日志文件
+*.log
+
+# 忽略临时文件和缓存
+*.tmp
+*.swp
+*.swo
+*.bak
+*.cache
+
+# 忽略敏感信息和配置文件
+.env
+config.ini
+
+# 忽略系统和IDE相关文件
+.DS_Store
+Thumbs.db
+
+# 忽略备份文件
+*.backup
+*.old
+*.bak
+
+#忽略格式化文件
+.clang-format
+
+# 忽略yyy用来debug的脚本
+sudo_gdb.sh
+
+output.*
+
+rankfile
+
+bc 
+cc 
+bfs
+pagerank
+sssp
+test.sh
+memcpy/# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+
+.cursorignore
