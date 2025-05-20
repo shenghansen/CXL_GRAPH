@@ -51,3 +51,5 @@ pagerank
 sssp
 test.sh
 memcpy/
+
+.cursorignore
