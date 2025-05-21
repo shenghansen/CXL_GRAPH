@@ -27,32 +27,36 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #define DMA_SIZE 8388608u
 // #define DMA_SIZE 0
 
+#ifndef OUTPUT_LEVEL
+#define OUTPUT_LEVEL 0
+#endif
+
 
 #include <fcntl.h>
 #include <malloc.h>
 #include <numa.h>
 #include <omp.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <sched.h>
 
 #include <algorithm>
-#include <functional>
-#include <mutex>
 #include <atomic>
 #include <cstddef>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <fstream>
-#include <iostream>
 
 #include "bitmap.hpp"
 #include "communicate.h"
@@ -148,7 +152,7 @@ struct GIMMessageBuffer {
         capacity = size;
         // data = (char*)malloc(capacity);
         data = (char*)cxl_shm->GIM_malloc(capacity, host_id, numa_id);
-        if(mlock(data,size)!= 0){
+        if (mlock(data, size) != 0) {
             ERROR("mlock faid");
         }
     }
@@ -600,22 +604,22 @@ public:
 
     double print_comm_time() { return comm_time; }
 
-    void print_get_sequence(){
-        for(auto i: sequence){
-            printf("%d ",i);
+    void print_get_sequence() {
+        for (auto i : sequence) {
+            printf("%d ", i);
         }
         printf("\n");
-        for(auto i: success){
-            printf("%d ",i);
+        for (auto i : success) {
+            printf("%d ", i);
         }
         printf("\n");
         sequence.clear();
         success.clear();
     }
 
-    void print_process_data(){
-        for(int i=0;i<partitions;i++){
-            printf("%d ",process_data_size[i]);
+    void print_process_data() {
+        for (int i = 0; i < partitions; i++) {
+            printf("%d ", process_data_size[i]);
         }
         printf("\n");
     }
@@ -781,7 +785,7 @@ public:
         assert(false);
     }
 
-  
+
     // transpose the graph
     void transpose() {
         std::swap(out_degree, in_degree);
@@ -800,417 +804,571 @@ public:
         std::swap(gim_compressed_outgoing_adj_index, gim_compressed_incoming_adj_index);
     }
 
-//持久化数据辅助函数
-// 辅助函数：向文件流写入数据块
-template<typename T>
-void write_data_to_stream(std::ofstream& fout, const T* data, size_t count) {
-    if (!fout.good()) {
-        std::cerr << "错误：写入文件流状态异常 (write_data_to_stream 前)" << std::endl;
-        // 可以选择抛出异常或设置错误标志
-        return;
-    }
-    fout.write(reinterpret_cast<const char*>(data), sizeof(T) * count);
-    if (!fout.good()) {
-        std::cerr << "错误：写入 " << sizeof(T) * count << " 字节到文件流失败。" << std::endl;
-    }
-}
-
-// 辅助函数：从文件流读取数据块
-template<typename T>
-void read_data_from_stream(std::ifstream& fin, T* data, size_t count) {
-    if (!fin.good()) {
-        std::cerr << "错误：读取文件流状态异常 (read_data_from_stream 前)" << std::endl;
-        return;
-    }
-    fin.read(reinterpret_cast<char*>(data), sizeof(T) * count);
-    if (!fin.good() && !fin.eof()) { // eof是正常结束，其他情况可能是错误
-        std::cerr << "错误：从文件流读取 " << sizeof(T) * count << " 字节失败。" << std::endl;
-    }
-}
-
-// 辅助函数：写入Bitmap对象
-void write_bitmap_to_stream(std::ofstream& fout, const Bitmap* bmp) {
-    if (!bmp) {
-        size_t zero_size = 0;
-        write_data_to_stream(fout, &zero_size, 1); // 表示空bitmap
-        return;
-    }
-    write_data_to_stream(fout, &bmp->size, 1);
-    if (bmp->size > 0 && bmp->data) {
-        write_data_to_stream(fout, bmp->data, WORD_OFFSET(bmp->size) + 1);
-    }
-}
-
-// 辅助函数：读取并重建Bitmap对象
-// 注意: 此函数分配新的Bitmap和其内部的data数组。调用者负责管理Bitmap对象的生命周期。
-// cxl_shm_ptr 和 target_partition_id_for_shm 用于在CXL SHM中分配data数组。
-// 如果 cxl_shm_ptr 为 nullptr，则在常规堆上分配。
-Bitmap* read_bitmap_from_stream(std::ifstream& fin, CXL_SHM* cxl_shm_ptr, int target_partition_id_for_shm) {
-    size_t b_size;
-    read_data_from_stream(fin, &b_size, 1);
-    if (b_size == 0) { // 空bitmap的标记
-        return new Bitmap(0, nullptr); // 或者根据您的Bitmap实现返回一个有效的空对象
-    }
-
-    unsigned long* b_data = nullptr;
-    size_t num_words = WORD_OFFSET(b_size) + 1;
-
-    if (cxl_shm_ptr) {
-        // 在CXL共享内存中为Bitmap的data分配空间
-        b_data = (unsigned long*)cxl_shm_ptr->GIM_malloc(sizeof(unsigned long) * num_words, target_partition_id_for_shm);
-        if (!b_data) {
-            std::cerr << "错误: CXL_SHM GIM_malloc Bitmap数据失败 (大小: " << num_words * sizeof(unsigned long) << ")" << std::endl;
-            return nullptr; // 或者抛出异常
+    // 持久化数据辅助函数
+    //  辅助函数：向文件流写入数据块
+    template<typename T>
+    void write_data_to_stream(std::ofstream& fout, const T* data, size_t count) {
+        if (!fout.good()) {
+            std::cerr << "id: " << partition_id
+                      << "错误：写入文件流状态异常 (write_data_to_stream 前)" << std::endl
+                      << std::flush;
+            // 可以选择抛出异常或设置错误标志
+            return;
         }
-    } else {
-        // 在常规堆上分配
-        b_data = new unsigned long[num_words];
+        fout.write(reinterpret_cast<const char*>(data), sizeof(T) * count);
+        if (!fout.good()) {
+            std::cerr << "id: " << partition_id << "错误：写入 " << sizeof(T) * count
+                      << " 字节到文件流失败。" << std::endl
+                      << std::flush;
+        }
+    }
+
+    // 辅助函数：从文件流读取数据块
+    template<typename T> void read_data_from_stream(std::ifstream& fin, T* data, size_t count) {
+        if (!fin.good()) {
+            std::cerr << "错误：读取文件流状态异常 (read_data_from_stream 前)" << std::endl;
+            return;
+        }
+        fin.read(reinterpret_cast<char*>(data), sizeof(T) * count);
+        if (!fin.good() && !fin.eof()) {   // eof是正常结束，其他情况可能是错误
+            std::cerr << "错误：从文件流读取 " << sizeof(T) * count << " 字节失败。" << std::endl;
+        }
     }
     
-    read_data_from_stream(fin, b_data, num_words);
-    return new Bitmap(b_size, b_data);
-}
 
-// 辅助函数：写入压缩邻接索引数组
-void write_compressed_adj_index_to_stream(std::ofstream& fout, const CompressedAdjIndexUnit* cai, size_t count) {
-    if (!cai && count > 0) { // 通常count为0时cai也为nullptr，但以防万一
-         std::cerr << "警告: 尝试写入空的 compressed_adj_index，但数量大于0。" << std::endl;
-    }
-    if (cai) {
-        write_data_to_stream(fout, cai, count);
-    }
-    // 如果cai为nullptr但count也为0，则不写入任何内容，由读取方处理
-}
-
-// 辅助函数：读取并重建压缩邻接索引数组
-// 注意: 此函数分配新的 CompressedAdjIndexUnit 数组。调用者负责管理其生命周期。
-CompressedAdjIndexUnit* read_compressed_adj_index_from_stream(std::ifstream& fin, size_t count, CXL_SHM* cxl_shm_ptr, int target_partition_id_for_shm) {
-    if (count == 0) {
-        return nullptr;
-    }
-    CompressedAdjIndexUnit* cai_data = nullptr;
-    if (cxl_shm_ptr) {
-        cai_data = (CompressedAdjIndexUnit*)cxl_shm_ptr->CXL_SHM_malloc(sizeof(CompressedAdjIndexUnit) * count);
-         if (!cai_data) {
-            std::cerr << "错误: CXL_SHM CXL_SHM_malloc CompressedAdjIndexUnit数据失败 (数量: " << count << ")" << std::endl;
-            return nullptr;
+    // 辅助函数：写入Bitmap对象
+    void write_bitmap_to_stream(std::ofstream& fout, const Bitmap* bmp) {
+        if (!bmp) {
+            size_t zero_size = 0;
+            write_data_to_stream(fout, &zero_size, 1);   // 表示空bitmap
+            return;
         }
-    } else {
-        cai_data = new CompressedAdjIndexUnit[count];
+        write_data_to_stream(fout, &bmp->size, 1);
+        if (bmp->size > 0 && bmp->data) {
+            write_data_to_stream(fout, bmp->data, WORD_OFFSET(bmp->size) + 1);
+        }
     }
-    read_data_from_stream(fin, cai_data, count);
-    return cai_data;
-}
-
 
     /**
- * @brief 将当前MPI分区的图数据结构保存到预处理文件中。
- * * @param base_filename 预处理文件的基础名称。实际文件名将附加分区ID和后缀。
- * 例如 "mygraph" -> "mygraph.part0.prep"
- */
-void save_preprocessed_graph(const std::string& base_filename) {
-    if (partition_id == -1) {
-        if (this->partition_id == 0) std::cerr << "错误：保存前 partition_id 未初始化。" << std::endl;
-        return;
-    }
-
-    std::string filename = base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
-    std::ofstream fout(filename, std::ios::binary | std::ios::trunc);
-
-    if (!fout.is_open()) {
-        std::cerr << "错误：无法打开文件以保存预处理图：" << filename << std::endl;
-        return;
-    }
-
-    if (this->partition_id == 0) {
-        std::cout << "正在为分区 " << this->partition_id << " 保存预处理图到 " << filename << std::endl;
-    }
-
-    // 1. 保存元数据
-    write_data_to_stream(fout, &this->vertices, 1);
-    write_data_to_stream(fout, &this->edges, 1);
-    write_data_to_stream(fout, &this->owned_vertices, 1);
-    write_data_to_stream(fout, &this->symmetric, 1);
-    write_data_to_stream(fout, &this->sockets, 1);
-    write_data_to_stream(fout, this->partition_offset, this->partitions + 1);
-    write_data_to_stream(fout, this->local_partition_offset, this->sockets + 1);
-    // 2. 保存度信息 (假设这些指针指向 gim_...[partition_id] 的CXL SHM区域)
-    // 这些是大小为 `this->vertices` 的数组
-    if (this->out_degree) write_data_to_stream(fout, this->out_degree, this->vertices);
-    else { /* 处理错误或写入占位符 */ std::cerr << "警告: out_degree 为空，未保存。" << std::endl;}
-    if (this->in_degree) write_data_to_stream(fout, this->in_degree, this->vertices);
-    else { /* 处理错误或写入占位符 */ std::cerr << "警告: in_degree 为空，未保存。" << std::endl;}
-
-    // 3. 保存每个NUMA socket的邻接表相关数据 (outgoing)
-    for (int s_i = 0; s_i < this->sockets; ++s_i) {
-        write_data_to_stream(fout, &this->outgoing_edges[s_i], 1);
-        write_data_to_stream(fout, this->outgoing_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
-        write_data_to_stream(fout, this->outgoing_adj_index[s_i], this->vertices + 1);
-        write_data_to_stream(fout, this->outgoing_adj_list[s_i],outgoing_adj_list_global_max);
-        write_data_to_stream(fout, &this->compressed_outgoing_adj_vertices[s_i], 1);
-        write_data_to_stream(fout, &this->compressed_outgoing_adj_index[s_i], compressed_outgoing_adj_index_global_max);
-    }
-
-    // 4. 保存每个NUMA socket的邻接表相关数据 (incoming)
-     for (int s_i = 0; s_i < this->sockets; ++s_i) {
-        write_data_to_stream(fout, &this->incoming_edges[s_i], 1);
-        write_data_to_stream(fout, this->incoming_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
-        write_data_to_stream(fout, this->incoming_adj_index[s_i], this->vertices + 1);
-        write_data_to_stream(fout, this->incoming_adj_list[s_i],incoming_adj_list_global_max);
-        write_data_to_stream(fout, &this->compressed_incoming_adj_vertices[s_i], 1);
-        write_data_to_stream(fout, &this->compressed_incoming_adj_index[s_i], compressed_incoming_adj_index_global_max);
-    }
-    fout.close();
-    if (this->partition_id == 0) {
-        std::cout << "分区 " << this->partition_id << " 的预处理图数据保存完成。" << std::endl;
-    }
-}
-
-
-/**
- * @brief 从预处理文件中加载图数据结构到当前MPI分区。
- * * @param base_filename 预处理文件的基础名称。
- * @return true 如果成功从预处理文件加载图数据。
- * @return false 如果预处理文件不存在或加载失败，此时应调用原始的load_directed。
- */
-bool load_preprocessed_graph(const std::string& base_filename) {
-    if (this->partition_id == -1) {
-        if (this->partition_id == 0) std::cerr << "错误：加载前 partition_id 未初始化。" << std::endl;
-        return false;
-    }
-
-    std::string filename = base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
-    std::ifstream fin(filename, std::ios::binary);
-
-    if (!fin.is_open()) {
-        if (this->partition_id == 0) std::cout << "预处理文件未找到: " << filename << "。将执行原始加载流程。" << std::endl;
-        return false;
-    }
-    if (this->partition_id == 0) {
-        std::cout << "正在从 " << filename << " 为分区 " << this->partition_id << " 加载预处理图..." << std::endl;
-    }
-
-    // 确保核心指针已初始化 (通常在Graph构造函数或init中完成)
-    // 例如: cxl_shm, gim_comm, partitions (来自MPI)
-    // 此处假设它们已存在。
-
-    // 1. 读取元数据
-    read_data_from_stream(fin, &this->vertices, 1);
-    read_data_from_stream(fin, &this->edges, 1);
-    read_data_from_stream(fin, &this->owned_vertices, 1);
-    read_data_from_stream(fin, &this->symmetric, 1);
-    read_data_from_stream(fin, &this->sockets, 1);
-
-    // 分配并读取分区偏移 (partitions 应已由MPI初始化)
-    if (this->partition_offset) delete[] this->partition_offset; // 清理旧数据（如果适用）
-    this->partition_offset = new VertexId[this->partitions + 1];
-    read_data_from_stream(fin, this->partition_offset, this->partitions + 1);
-
-    if (this->local_partition_offset) delete[] this->local_partition_offset;
-    this->local_partition_offset = new VertexId[this->sockets + 1];
-    read_data_from_stream(fin, this->local_partition_offset, this->sockets + 1);
-
-    // 2. 分配并读取度信息 (分配到CXL SHM)
-    if (!this->gim_out_degree) this->gim_out_degree = new VertexId*[this->partitions](); // 初始化为 nullptr
-    this->gim_out_degree[this->partition_id] = (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, this->partition_id);
-    this->out_degree = this->gim_out_degree[this->partition_id];
-    if(this->out_degree) read_data_from_stream(fin, this->out_degree, this->vertices);
-    else { std::cerr << "错误: out_degree CXL SHM 分配失败。" << std::endl; fin.close(); return false;}
-
-    if (!this->gim_in_degree) this->gim_in_degree = new VertexId*[this->partitions]();
-    this->gim_in_degree[this->partition_id] = (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, this->partition_id);
-    this->in_degree = this->gim_in_degree[this->partition_id];
-    if(this->in_degree) read_data_from_stream(fin, this->in_degree, this->vertices);
-    else { std::cerr << "错误: in_degree CXL SHM 分配失败。" << std::endl; fin.close(); return false;}
-
-
-    // 3. 分配并读取每个NUMA socket的邻接表相关数据 (outgoing)
-    // 初始化顶级指针数组 (如果Graph的构造函数/init没有做的话)
-    if (!this->outgoing_edges) this->outgoing_edges = new EdgeId[this->sockets]();
-    if (!this->gim_outgoing_adj_bitmap) this->gim_outgoing_adj_bitmap[this->partition_id] = new Bitmap*[this->sockets]();
-    if(this->gim_outgoing_adj_bitmap[this->partition_id] == nullptr) this->gim_outgoing_adj_bitmap[this->partition_id] = new Bitmap*[this->sockets];
-    this->outgoing_adj_bitmap = this->gim_outgoing_adj_bitmap[this->partition_id];
-
-    if (!this->gim_outgoing_adj_index) this->gim_outgoing_adj_index = new EdgeId**[this->partitions]();
-    if (!this->gim_outgoing_adj_index[this->partition_id]) this->gim_outgoing_adj_index[this->partition_id] = new EdgeId*[this->sockets]();
-    this->outgoing_adj_index = this->gim_outgoing_adj_index[this->partition_id];
-    
-    if (!this->gim_outgoing_adj_list) this->gim_outgoing_adj_list = new AdjUnit<EdgeData>**[this->partitions]();
-    if (!this->gim_outgoing_adj_list[this->partition_id]) this->gim_outgoing_adj_list[this->partition_id] = new AdjUnit<EdgeData>*[this->sockets]();
-    this->outgoing_adj_list = this->gim_outgoing_adj_list[this->partition_id];
-
-    if (!this->compressed_outgoing_adj_vertices) this->compressed_outgoing_adj_vertices = new VertexId[this->sockets]();
-    if (!this->gim_compressed_outgoing_adj_index) this->gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[this->partitions]();
-    if (!this->gim_compressed_outgoing_adj_index[this->partition_id]) this->gim_compressed_outgoing_adj_index[this->partition_id] = new CompressedAdjIndexUnit*[this->sockets]();
-    this->compressed_outgoing_adj_index = this->gim_compressed_outgoing_adj_index[this->partition_id];
-
-
-    for (int s_i = 0; s_i < this->sockets; ++s_i) {
-        read_data_from_stream(fin, &this->outgoing_edges[s_i], 1);
-        // Bitmap的data指针在read_bitmap_from_stream内部处理CXL SHM分配
-        this->outgoing_adj_bitmap[s_i] = read_bitmap_from_stream(fin, this->cxl_shm, this->partition_id);
-        if (!this->outgoing_adj_bitmap[s_i]) { /* 错误处理 */ fin.close(); return false; }
-
-        this->outgoing_adj_index[s_i] = (EdgeId*)this->cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (this->vertices + 1));
-        if(this->outgoing_adj_index[s_i]) read_data_from_stream(fin, this->outgoing_adj_index[s_i], this->vertices + 1);
-        else { /* 错误处理 */ fin.close(); return false; }
-
-        if (this->outgoing_edges[s_i] > 0) {
-            this->outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)this->cxl_shm->CXL_SHM_malloc(this->unit_size * this->outgoing_edges[s_i]);
-            if(this->outgoing_adj_list[s_i]) read_data_from_stream(fin, this->outgoing_adj_list[s_i], this->outgoing_edges[s_i]);
-            else { /* 错误处理 */ fin.close(); return false; }
-        } else {
-            this->outgoing_adj_list[s_i] = nullptr;
+     * @brief 将当前MPI分区的图数据结构保存到预处理文件中。
+     * * @param base_filename 预处理文件的基础名称。实际文件名将附加分区ID和后缀。
+     * 例如 "mygraph" -> "mygraph.part0.prep"
+     */
+    void save_preprocessed_graph(const std::string& base_filename) {
+        if (partition_id == -1) {
+            if (this->partition_id ==
+                0)   // 即使条件为假，为了保持结构，这里的 this->partition_id == 0 检查也保留
+                std::cerr << "错误：保存前 partition_id 未初始化。" << std::endl;
+            return;
         }
 
-        read_data_from_stream(fin, &this->compressed_outgoing_adj_vertices[s_i], 1);
-        size_t comp_out_idx_count = this->compressed_outgoing_adj_vertices[s_i] > 0 ? this->compressed_outgoing_adj_vertices[s_i] + 1 : (this->compressed_outgoing_adj_vertices[s_i] == 0 ? 1:0);
-        if (comp_out_idx_count > 0) {
-            this->compressed_outgoing_adj_index[s_i] = read_compressed_adj_index_from_stream(fin, comp_out_idx_count, this->cxl_shm, this->partition_id);
-             if (!this->compressed_outgoing_adj_index[s_i]) { /* 错误处理 */ fin.close(); return false; }
-        } else {
-             this->compressed_outgoing_adj_index[s_i] = nullptr;
+        std::string filename =
+            base_filename +".part" + std::to_string(this->partition_id) + ".prep";
+        std::ofstream fout(filename, std::ios::binary | std::ios::trunc);
+
+        if (!fout.is_open()) {
+            std::cerr << "错误：无法打开文件以保存预处理图：" << filename << std::endl;
+            return;
         }
-    }
 
-    // 4. 分配并读取每个NUMA socket的邻接表相关数据 (incoming)
-    if (!this->incoming_edges) this->incoming_edges = new EdgeId[this->sockets]();
-    if (!this->gim_incoming_adj_bitmap) this->gim_incoming_adj_bitmap = new Bitmap**[this->partitions]();
-    if (!this->gim_incoming_adj_bitmap[this->partition_id]) this->gim_incoming_adj_bitmap[this->partition_id] = new Bitmap*[this->sockets]();
-    this->incoming_adj_bitmap = this->gim_incoming_adj_bitmap[this->partition_id];
+        if (this->partition_id == 0) {
+            std::cout << "正在为分区 " << this->partition_id << " 保存预处理图到 " << filename
+                      << std::endl;
+        }
 
-    if (!this->gim_incoming_adj_index) this->gim_incoming_adj_index = new EdgeId**[this->partitions]();
-    if (!this->gim_incoming_adj_index[this->partition_id]) this->gim_incoming_adj_index[this->partition_id] = new EdgeId*[this->sockets]();
-    this->incoming_adj_index = this->gim_incoming_adj_index[this->partition_id];
+        // 1. 保存元数据
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.1: Writing 'vertices'. Pointer: "
+                      << (void*)&this->vertices << ", Count: 1" << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, &this->vertices, 1);
 
-    if (!this->gim_incoming_adj_list) this->gim_incoming_adj_list = new AdjUnit<EdgeData>**[this->partitions]();
-    if (!this->gim_incoming_adj_list[this->partition_id]) this->gim_incoming_adj_list[this->partition_id] = new AdjUnit<EdgeData>*[this->sockets]();
-    this->incoming_adj_list = this->gim_incoming_adj_list[this->partition_id];
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.2: Writing 'edges'. Pointer: " << (void*)&this->edges
+                      << ", Count: 1" << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, &this->edges, 1);
 
-    if (!this->compressed_incoming_adj_vertices) this->compressed_incoming_adj_vertices = new VertexId[this->sockets]();
-    if (!this->gim_compressed_incoming_adj_index) this->gim_compressed_incoming_adj_index = new CompressedAdjIndexUnit**[this->partitions]();
-    if (!this->gim_compressed_incoming_adj_index[this->partition_id]) this->gim_compressed_incoming_adj_index[this->partition_id] = new CompressedAdjIndexUnit*[this->sockets]();
-    this->compressed_incoming_adj_index = this->gim_compressed_incoming_adj_index[this->partition_id];
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.3: Writing 'owned_vertices'. Pointer: "
+                      << (void*)&this->owned_vertices << ", Count: 1" << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, &this->owned_vertices, 1);
 
-    for (int s_i = 0; s_i < this->sockets; ++s_i) {
-        read_data_from_stream(fin, &this->incoming_edges[s_i], 1);
-        this->incoming_adj_bitmap[s_i] = read_bitmap_from_stream(fin, this->cxl_shm, this->partition_id);
-        if (!this->incoming_adj_bitmap[s_i]) { /* 错误处理 */ fin.close(); return false; }
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.4: Writing 'symmetric'. Pointer: "
+                      << (void*)&this->symmetric << ", Count: 1" << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, &this->symmetric, 1);
+
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.5: Writing 'sockets'. Pointer: "
+                      << (void*)&this->sockets << ", Count: 1" << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, &this->sockets, 1);
+
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.6: Writing 'partition_offset'. Pointer: "
+                      << (void*)this->partition_offset << ", Count: " << (this->partitions + 1)
+                      << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, this->partition_offset, this->partitions + 1);
+
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] 1.7: Writing 'local_partition_offset'. Pointer: "
+                      << (void*)this->local_partition_offset << ", Count: " << (this->sockets + 1)
+                      << std::endl
+                      << std::flush;
+        }
+        write_data_to_stream(fout, this->local_partition_offset, this->sockets + 1);
         
-        this->incoming_adj_index[s_i] = (EdgeId*)this->cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (this->vertices + 1));
-        if(this->incoming_adj_index[s_i]) read_data_from_stream(fin, this->incoming_adj_index[s_i], this->vertices + 1);
-        else { /* 错误处理 */ fin.close(); return false; }
+        write_data_to_stream(fout, &this->outgoing_adj_list_global_max, 1);
+        write_data_to_stream(fout, &this->incoming_adj_list_global_max, 1);
+        write_data_to_stream(fout, &this->compressed_outgoing_adj_index_global_max, 1);
+        write_data_to_stream(fout, &this->compressed_incoming_adj_index_global_max, 1);
 
-        if (this->incoming_edges[s_i] > 0) {
-            this->incoming_adj_list[s_i] = (AdjUnit<EdgeData>*)this->cxl_shm->CXL_SHM_malloc(this->unit_size * this->incoming_edges[s_i]);
-            if(this->incoming_adj_list[s_i]) read_data_from_stream(fin, this->incoming_adj_list[s_i], this->incoming_edges[s_i]);
-            else { /* 错误处理 */ fin.close(); return false; }
+
+        // 2. 保存度信息 (假设这些指针指向 gim_...[partition_id] 的CXL SHM区域)
+        // 这些是大小为 `this->vertices` 的数组
+        if (this->out_degree) {
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 2.1: Writing 'out_degree'. Pointer: "
+                          << (void*)this->out_degree << ", Count: " << this->vertices << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, this->out_degree, this->vertices);
         } else {
-            this->incoming_adj_list[s_i] = nullptr;
+            if (this->partition_id == 0) {
+                std::cerr << "[DEBUG_SAVE P0] 警告: out_degree 为空，未保存。" << std::endl
+                          << std::flush;
+            }
+        }
+        if (this->in_degree) {
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 2.2: Writing 'in_degree'. Pointer: "
+                          << (void*)this->in_degree << ", Count: " << this->vertices << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, this->in_degree, this->vertices);
+        } else {
+            if (this->partition_id == 0) {
+                std::cerr << "[DEBUG_SAVE P0] 警告: in_degree 为空，未保存。" << std::endl
+                          << std::flush;
+            }
         }
 
-        read_data_from_stream(fin, &this->compressed_incoming_adj_vertices[s_i], 1);
-        size_t comp_in_idx_count = this->compressed_incoming_adj_vertices[s_i] > 0 ? this->compressed_incoming_adj_vertices[s_i] + 1 : (this->compressed_incoming_adj_vertices[s_i] == 0 ? 1:0);
-        if (comp_in_idx_count > 0) {
-            this->compressed_incoming_adj_index[s_i] = read_compressed_adj_index_from_stream(fin, comp_in_idx_count, this->cxl_shm, this->partition_id);
-            if (!this->compressed_incoming_adj_index[s_i]) { /* 错误处理 */ fin.close(); return false; }
-        } else {
-            this->compressed_incoming_adj_index[s_i] = nullptr;
+        // 3. 保存每个NUMA socket的邻接表相关数据 (outgoing)
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] Starting section 3: outgoing adj data for "
+                      << this->sockets << " sockets." << std::endl
+                      << std::flush;
+        }
+        for (int s_i = 0; s_i < this->sockets; ++s_i) {
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 1) << " (s_i=" << s_i
+                          << "): Writing 'outgoing_edges[s_i]'. Pointer: "
+                          << (void*)&this->outgoing_edges[s_i] << ", Count: 1" << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, &this->outgoing_edges[s_i], 1);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 2) << " (s_i=" << s_i
+                          << "): Writing 'outgoing_adj_bitmap[s_i]->data'. Pointer: "
+                          << (void*)(this->outgoing_adj_bitmap[s_i]
+                                         ? this->outgoing_adj_bitmap[s_i]->data
+                                         : nullptr)
+                          << ", Count: " << (WORD_OFFSET(vertices) + 1) << std::endl
+                          << std::flush;
+            }
+            // 添加对 this->outgoing_adj_bitmap[s_i] 的空指针检查
+            if (this->outgoing_adj_bitmap[s_i]) {
+                write_data_to_stream(
+                    fout, this->outgoing_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+            } else {
+                if (this->partition_id == 0) {
+                    std::cerr << "[DEBUG_SAVE P0] 警告: outgoing_adj_bitmap[" << s_i
+                              << "] 为空，未保存对应 data。" << std::endl
+                              << std::flush;
+                }
+                // 你可能需要根据实际情况决定如何处理：写入0，跳过，或者抛出错误
+            }
+
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 3) << " (s_i=" << s_i
+                          << "): Writing 'outgoing_adj_index[s_i]'. Pointer: "
+                          << (void*)this->outgoing_adj_index[s_i]
+                          << ", Count: " << (this->vertices + 1) << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, this->outgoing_adj_index[s_i], this->vertices + 1);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 4) << " (s_i=" << s_i
+                          << "): Writing 'outgoing_adj_list[s_i]'. Pointer: "
+                          << (void*)this->outgoing_adj_list[s_i]
+                          << ", Count: " << outgoing_adj_list_global_max << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(
+                fout, this->outgoing_adj_list[s_i], outgoing_adj_list_global_max * unit_size);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 5) << " (s_i=" << s_i
+                          << "): Writing 'compressed_outgoing_adj_vertices[s_i]'. Pointer: "
+                          << (void*)&this->compressed_outgoing_adj_vertices[s_i] << ", Count: 1"
+                          << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, &this->compressed_outgoing_adj_vertices[s_i], 1);
+
+            if (this->partition_id == 0) {
+                // 注意这里 &this->compressed_outgoing_adj_index[s_i] 的用法，如果
+                // write_data_to_stream 期望的是 T* 而不是 T** 那么这里可能是
+                // &操作符的问题，或者模板特化的问题。 假设 this->compressed_outgoing_adj_index[s_i]
+                // 是一个 CompressedAdjIndexUnit* 传递 &this->compressed_outgoing_adj_index[s_i]
+                // 会得到 CompressedAdjIndexUnit**
+                std::cout
+                    << "[DEBUG_SAVE P0] 3." << (s_i * 6 + 6) << " (s_i=" << s_i
+                    << "): Writing 'compressed_outgoing_adj_index[s_i]'. Argument Pointer: "
+                    << (void*)&this->compressed_outgoing_adj_index[s_i]   // 这是指向指针的指针
+                    << ", Actual Pointer Value: "
+                    << (void*)this->compressed_outgoing_adj_index[s_i]   // 这是指针实际的值
+                    << ", Count: " << compressed_outgoing_adj_index_global_max << std::endl
+                    << std::flush;
+            }
+            write_data_to_stream(fout,
+                                 this->compressed_outgoing_adj_index[s_i],
+                                 compressed_outgoing_adj_index_global_max+1);
+        }
+
+        // 4. 保存每个NUMA socket的邻接表相关数据 (incoming)
+        if (this->partition_id == 0) {
+            std::cout << "[DEBUG_SAVE P0] Starting section 4: incoming adj data for "
+                      << this->sockets << " sockets." << std::endl
+                      << std::flush;
+        }
+        for (int s_i = 0; s_i < this->sockets; ++s_i) {
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 1) << " (s_i=" << s_i
+                          << "): Writing 'incoming_edges[s_i]'. Pointer: "
+                          << (void*)&this->incoming_edges[s_i] << ", Count: 1" << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, &this->incoming_edges[s_i], 1);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 2) << " (s_i=" << s_i
+                          << "): Writing 'incoming_adj_bitmap[s_i]->data'. Pointer: "
+                          << (void*)(this->incoming_adj_bitmap[s_i]
+                                         ? this->incoming_adj_bitmap[s_i]->data
+                                         : nullptr)
+                          << ", Count: " << (WORD_OFFSET(vertices) + 1) << std::endl
+                          << std::flush;
+            }
+            // 添加对 this->incoming_adj_bitmap[s_i] 的空指针检查
+            if (this->incoming_adj_bitmap[s_i]) {
+                write_data_to_stream(
+                    fout, this->incoming_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+            } else {
+                if (this->partition_id == 0) {
+                    std::cerr << "[DEBUG_SAVE P0] 警告: incoming_adj_bitmap[" << s_i
+                              << "] 为空，未保存对应 data。" << std::endl
+                              << std::flush;
+                }
+                // 你可能需要根据实际情况决定如何处理
+            }
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 3) << " (s_i=" << s_i
+                          << "): Writing 'incoming_adj_index[s_i]'. Pointer: "
+                          << (void*)this->incoming_adj_index[s_i]
+                          << ", Count: " << (this->vertices + 1) << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, this->incoming_adj_index[s_i], this->vertices + 1);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 4) << " (s_i=" << s_i
+                          << "): Writing 'incoming_adj_list[s_i]'. Pointer: "
+                          << (void*)this->incoming_adj_list[s_i]
+                          << ", Count: " << incoming_adj_list_global_max << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(
+                fout, this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
+
+            if (this->partition_id == 0) {
+                std::cout << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 5) << " (s_i=" << s_i
+                          << "): Writing 'compressed_incoming_adj_vertices[s_i]'. Pointer: "
+                          << (void*)&this->compressed_incoming_adj_vertices[s_i] << ", Count: 1"
+                          << std::endl
+                          << std::flush;
+            }
+            write_data_to_stream(fout, &this->compressed_incoming_adj_vertices[s_i], 1);
+
+            if (this->partition_id == 0) {
+                // 同样注意这里 &this->compressed_incoming_adj_index[s_i] 的用法
+                std::cout
+                    << "[DEBUG_SAVE P0] 4." << (s_i * 6 + 6) << " (s_i=" << s_i
+                    << "): Writing 'compressed_incoming_adj_index[s_i]'. Argument Pointer: "
+                    << (void*)&this->compressed_incoming_adj_index[s_i]   // 这是指向指针的指针
+                    << ", Actual Pointer Value: "
+                    << (void*)this->compressed_incoming_adj_index[s_i]   // 这是指针实际的值
+                    << ", Count: " << compressed_incoming_adj_index_global_max << std::endl
+                    << std::flush;
+            }
+            write_data_to_stream(fout,
+                                 this->compressed_incoming_adj_index[s_i],
+                                 compressed_incoming_adj_index_global_max+1);
+        }
+
+        fout.close();
+        if (this->partition_id == 0) {
+            std::cout << "分区 " << this->partition_id << " 的预处理图数据保存完成。" << std::endl;
         }
     }
 
-    if (fin.eof()) {
-        // 文件正常读到末尾
-    } else if (fin.fail()) {
-        std::cerr << "错误: 从预处理文件读取数据时发生错误 (可能未完整读取)。" << filename << std::endl;
+    /**
+     * @brief 从预处理文件中加载图数据结构到当前MPI分区。
+     * * @param base_filename 预处理文件的基础名称。
+     * @return true 如果成功从预处理文件加载图数据。
+     * @return false 如果预处理文件不存在或加载失败，此时应调用原始的load_directed。
+     */
+
+    bool load_preprocessed_graph(const std::string& base_filename) {
+        if (this->partition_id == -1) {
+            if (this->partition_id == 0)
+                std::cerr << "错误：加载前 partition_id 未初始化。" << std::endl;
+            return false;
+        }
+
+        std::string filename =
+            base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
+        std::ifstream fin(filename, std::ios::binary);
+
+        if (!fin.is_open()) {
+            // if (this->partition_id == 0)
+            //     std::cout << "预处理文件未找到: " << filename << "。将执行原始加载流程。"
+            //               << std::endl;
+            return false;
+        }
+        // if (this->partition_id == 0) {
+        //     std::cout << "正在从 " << filename << " 为分区 " << this->partition_id
+        //               << " 加载预处理图..." << std::endl;
+        // }
+
+        // 1. 读取元数据
+        read_data_from_stream(fin, &this->vertices, 1);
+        read_data_from_stream(fin, &this->edges, 1);
+        read_data_from_stream(fin, &this->owned_vertices, 1);
+        read_data_from_stream(fin, &this->symmetric, 1);
+        read_data_from_stream(fin, &this->sockets, 1);
+
+        this->partition_offset = new VertexId[this->partitions + 1];
+        read_data_from_stream(fin, this->partition_offset, this->partitions + 1);
+        this->local_partition_offset = new VertexId[this->sockets + 1];
+        read_data_from_stream(fin, this->local_partition_offset, this->sockets + 1);
+        
+        read_data_from_stream(fin,&this->outgoing_adj_list_global_max,1);
+        read_data_from_stream(fin,&this->incoming_adj_list_global_max,1);
+        read_data_from_stream(fin,&this->compressed_outgoing_adj_index_global_max,1);
+        read_data_from_stream(fin,&this->compressed_incoming_adj_index_global_max,1);
+
+        // if (partition_id==0) {
+        //     std::cout << "1. read metadata done" << std::endl;
+        // }
+
+        // 2. 分配并读取度信息 (分配到CXL SHM)
+        if (!this->gim_out_degree)
+            this->gim_out_degree = new VertexId*[this->partitions];   // 初始化为 nullptr
+        for (int i = 0; i < this->partitions; i++) {
+            this->gim_out_degree[i] =
+                (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, i);
+        }
+        this->out_degree = this->gim_out_degree[this->partition_id];
+        if (this->out_degree)
+            read_data_from_stream(fin, this->out_degree, this->vertices);
+        else {
+            std::cerr << "错误: out_degree CXL SHM 分配失败。" << std::endl;
+            fin.close();
+            return false;
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        if (!this->gim_in_degree) this->gim_in_degree = new VertexId*[this->partitions]();
+        for (int i = 0; i < this->partitions; i++) {
+            this->gim_in_degree[i] =
+                (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, i);
+        }
+        this->in_degree = this->gim_in_degree[this->partition_id];
+        if (this->in_degree)
+            read_data_from_stream(fin, this->in_degree, this->vertices);
+        else {
+            std::cerr << "错误: in_degree CXL SHM 分配失败。" << std::endl;
+            fin.close();
+            return false;
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        // if(partition_id==0){
+        //     std::cout << "2. read degree done" << std::endl;
+        // }
+
+        // 3. 分配并读取每个NUMA socket的邻接表相关数据 (outgoing)
+        if (!this->outgoing_edges) this->outgoing_edges = new EdgeId[this->sockets];
+        gim_outgoing_adj_bitmap = new Bitmap**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+                    sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+                gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        outgoing_adj_bitmap = gim_outgoing_adj_bitmap[partition_id];
+
+        gim_outgoing_adj_index = new EdgeId**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_index[p_i][s_i] =
+                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        outgoing_adj_index = gim_outgoing_adj_index[partition_id];
+
+        gim_outgoing_adj_list = new AdjUnit<EdgeData>**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(
+                    outgoing_adj_list_global_max * unit_size);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        outgoing_adj_list = gim_outgoing_adj_list[partition_id];
+
+        compressed_outgoing_adj_vertices = new VertexId[sockets];
+        gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_outgoing_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_outgoing_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        (compressed_outgoing_adj_index_global_max + 1) *
+                        sizeof(CompressedAdjIndexUnit));
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        compressed_outgoing_adj_index = gim_compressed_outgoing_adj_index[partition_id];
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        for (int s_i = 0; s_i < this->sockets; ++s_i) {
+            read_data_from_stream(fin, &this->outgoing_edges[s_i], 1);
+            read_data_from_stream(
+                fin, this->outgoing_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+            read_data_from_stream(fin, this->outgoing_adj_index[s_i], this->vertices + 1);
+            read_data_from_stream(
+                fin, this->outgoing_adj_list[s_i], outgoing_adj_list_global_max * unit_size);
+            read_data_from_stream(fin, &this->compressed_outgoing_adj_vertices[s_i], 1);
+            read_data_from_stream(fin,
+                                  this->compressed_outgoing_adj_index[s_i],
+                                  compressed_outgoing_adj_index_global_max+1);
+        }
+        // if (partition_id==0) {
+        //     std::cout << "3. read outgoing adj done" << std::endl;
+        // }
+
+        // 4. 分配并读取每个NUMA socket的邻接表相关数据 (incoming)
+        // 注意：这里的逻辑与 outgoing 的处理类似
+        if (!this->incoming_edges) this->incoming_edges = new EdgeId[this->sockets]();
+        gim_incoming_adj_bitmap = new Bitmap**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+                    sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+                gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        incoming_adj_bitmap = gim_incoming_adj_bitmap[partition_id];
+        gim_incoming_adj_index = new EdgeId**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_index[p_i] = new EdgeId*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_incoming_adj_index[p_i][s_i] =
+                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+            }
+        }
+        incoming_adj_index = gim_incoming_adj_index[partition_id];
+        gim_incoming_adj_list = new AdjUnit<EdgeData>**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(
+                    incoming_adj_list_global_max * unit_size);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        incoming_adj_list = gim_incoming_adj_list[partition_id];
+        compressed_incoming_adj_vertices = new VertexId[sockets];
+        gim_compressed_incoming_adj_index = new CompressedAdjIndexUnit**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_incoming_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_incoming_adj_index[p_i][s_i] =
+                    (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+                        (compressed_incoming_adj_index_global_max + 1) *
+                        sizeof(CompressedAdjIndexUnit));
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
+        MPI_Barrier(MPI_COMM_WORLD);
+        for (int s_i = 0; s_i < this->sockets; ++s_i) {
+            read_data_from_stream(fin, &this->incoming_edges[s_i], 1);
+            read_data_from_stream(
+                fin, this->incoming_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+            read_data_from_stream(fin, this->incoming_adj_index[s_i], this->vertices + 1);
+            read_data_from_stream(
+                fin, this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
+            read_data_from_stream(fin, &this->compressed_incoming_adj_vertices[s_i], 1);
+            read_data_from_stream(fin,
+                                  this->compressed_incoming_adj_index[s_i],
+                                  compressed_incoming_adj_index_global_max+1);
+        }
+        if (fin.eof()) {
+            // 文件正常读到末尾
+        } else if (fin.fail()) {
+            std::cerr << "错误: 从预处理文件读取数据时发生错误 (可能未完整读取)。" << filename
+                      << std::endl;
+            fin.close();
+            // 可能需要清理已分配的内存
+            return false;
+        }
         fin.close();
-        // 可能需要清理已分配的内存
-        return false;
+        transpose();
+        tune_chunks();   // tuned_chunks_dense init
+        transpose();     // exchange tuned_chunks_dense and tuned_chunks_sparse
+        // tuned_chunks_sparse = tuned_chunks_dense
+        tune_chunks();   // tuned_chunks_dense init
+        // gim_buffer
+        init_gim_buffer();
+        // if (this->partition_id == 0) {
+        //     std::cout << "分区 " << this->partition_id << " 的预处理图数据加载并初始化完成。"
+        //               << std::endl;
+        // }
+        return true;
     }
-    fin.close();
-
-    // 5. 后续初始化步骤 (非常重要)
-    // 预处理数据加载后，图的核心结构已恢复。
-    // 但 tuned_chunks_dense/sparse 和 GIM 通信缓冲区等需要重新初始化。
-    // 这里的顺序和逻辑应与 load_directed 末尾的初始化步骤保持一致。
-    if (this->symmetric) { // 如果图是对称加载的（尽管我们这里是load_directed，但对称性标志被保存了）
-        // 对于对称图，通常出入度结构是相同的，transpose可能不需要，或者tune_chunks逻辑不同
-        // 这里的示例假设按 load_directed 的非对称流程恢复
-        // 如果您有 load_undirected_from_directed 的预处理，逻辑会不同
-    }
-
-    // 假设加载后，我们处于“出边视角” (outgoing_* 结构是主要的)
-    // tune_chunks() 通常基于当前的 incoming_adj_index (在 transpose 后是原始的 outgoing)
-    // 因此，需要先确保图处于正确的"视角"
-    // 原始 load_directed 后的顺序是:
-    // transpose(); // 使得 incoming_* 成为主视角 (原始的 outgoing)
-    // tune_chunks(); // tuned_chunks_dense 基于此初始化
-    // transpose(); // 切换回 outgoing_* 为主视角, tuned_chunks_sparse = (之前的)tuned_chunks_dense
-    // tune_chunks(); // tuned_chunks_dense 基于 (现在的) incoming_* 重新初始化
-
-    // 为了恢复这个状态:
-    // 此时加载的数据，incoming_* 是真实的入边结构，outgoing_* 是真实的出边结构
-    // 我们需要模拟 load_directed 末尾的调用顺序
-    // 1. 使图处于 "入边是主要处理对象" 的状态 (对于第一次 tune_chunks)
-    //    在 load_directed 中，第一次 tune_chunks 前图是出边视角，然后 transpose
-    //    这里我们加载后，如果想直接 tune_chunks_dense (通常用于稠密模式，处理入边)，
-    //    则图应该已经是正确的状态（incoming_* 结构是有效的）。
-    
-    // 假设加载后，我们希望 tune_chunks_dense 基于入边，tune_chunks_sparse 基于出边
-    // (与 load_directed 最终状态一致)
-
-    // 第一次 tune_chunks (初始化 tuned_chunks_dense，基于当前 incoming_adj_index)
-    // 注意：此时的 incoming_adj_index 是从文件加载的真实入边索引
-    // 而原始 load_directed 中第一次 tune_chunks 前会 transpose，使得当时的 incoming_adj_index 是原始出边索引
-    // 为了匹配原始逻辑，我们需要先将图视为“出边视角”（即当前状态），然后调用 transpose
-    // 这样 tune_chunks 就能基于“转置后的入边”（即原始出边）来初始化 tuned_chunks_dense
-    
-    // 模拟 load_directed 末尾的 transpose 和 tune_chunks 调用序列
-    // 假设加载的数据已经是最终的、分离的出/入边结构
-    // 那么第一次 tune_chunks 应该基于出边（用于构建 tuned_chunks_sparse）
-    // 第二次 tune_chunks 应该基于入边（用于构建 tuned_chunks_dense）
-
-    // 状态1: 当前 outgoing_* 是出边, incoming_* 是入边
-    // tune_chunks() 会使用当前的 incoming_* 来设置 tuned_chunks_dense
-    // 为了让 tuned_chunks_sparse 基于出边，我们先调用 tune_chunks()
-    // 此时 tuned_chunks_dense 是基于当前的 incoming_*
-    // 然后 transpose(), out/in 交换, tuned_chunks_dense/sparse 交换
-    // 此时 tuned_chunks_sparse 是基于原始 incoming_*
-    // 然后再次 tune_chunks(), 新的 tuned_chunks_dense 是基于 (新的) incoming_* (即原始 outgoing_*}
-    // 这有点绕，关键是确保 tune_chunks 使用的 compressed_incoming_adj_index 是正确的。
-
-    // 简化逻辑：假设 tune_chunks 总是根据当前的 compressed_incoming_adj_index 初始化 tuned_chunks_dense
-    // 而 transpose 会交换 tuned_chunks_dense 和 tuned_chunks_sparse
-    
-    // 目标：tuned_chunks_dense 基于入边，tuned_chunks_sparse 基于出边。
-    // 当前状态：incoming_* 是入边，outgoing_* 是出边。
-    
-    // 1. 初始化 tuned_chunks_dense (基于当前入边)
-    this->tune_chunks(); // tuned_chunks_dense 使用当前的 compressed_incoming_adj_index
-
-    // 2. 转置，为 tuned_chunks_sparse 做准备
-    this->transpose(); // out/in 交换, tuned_chunks_dense/sparse 交换
-                       // 现在 tuned_chunks_sparse = (之前基于入边的 tuned_chunks_dense)
-                       //      当前的 incoming_* 是之前的 outgoing_* (出边)
-
-    // 3. 初始化 (新的) tuned_chunks_dense (基于当前入边，即原始出边)
-    this->tune_chunks(); // tuned_chunks_dense 使用当前的 compressed_incoming_adj_index (原始出边)
-    
-    // 4. 再次转置，恢复到出边为主的图表示，同时得到正确的 tuned_chunks_dense 和 tuned_chunks_sparse
-    this->transpose(); // out/in 再次交换, tuned_chunks_dense/sparse 再次交换
-                       // 现在：
-                       // outgoing_* 是出边, incoming_* 是入边
-                       // tuned_chunks_dense 是基于入边初始化的
-                       // tuned_chunks_sparse 是基于出边初始化的
-                       // 这与 load_directed 后的状态一致。
-
-    this->init_gim_buffer(); // 初始化GIM通信缓冲区
-
-    if (this->partition_id == 0) {
-        std::cout << "分区 " << this->partition_id << " 的预处理图数据加载并初始化完成。" << std::endl;
-    }
-    return true;
-}
 
     // load a directed graph from path
     void load_directed(std::string path, VertexId vertices) {
@@ -2163,6 +2321,159 @@ bool load_preprocessed_graph(const std::string& base_filename) {
     }
 
     // 为线程分配chunk工作块，确定每个线程负责哪些点
+    //     void tune_chunks() {
+    //     if(this->partition_id == 0) {
+    //         std::cout << "\n[DEBUG] ====== 开始执行 tune_chunks ======" << std::endl;
+    //         std::cout << "[DEBUG] partition_id = " << partition_id << std::endl;
+    //     }
+
+    //     tuned_chunks_dense = new ThreadState*[partitions];
+    //     int current_send_part_id = partition_id;
+
+    //     for (int step = 0; step < partitions; step++) {   // 遍历每个host
+    //         current_send_part_id = (current_send_part_id + 1) % partitions;
+    //         int i = current_send_part_id;
+
+    //         if(this->partition_id == 0) {
+    //             std::cout << "\n[DEBUG] === 处理分区 " << i << " ===" << std::endl;
+    //         }
+
+    //         tuned_chunks_dense[i] = new ThreadState[threads];   // 为当前分区创建ThreadState
+
+    //         EdgeId remained_edges;    // 当前分区中剩余的边数量
+    //         int remained_partitions;  // 剩余分配的分区数
+    //         VertexId last_p_v_i;     // 记录当前线程开始处理的顶点
+    //         VertexId end_p_v_i;      // 记录当前线程结束处理的顶点
+
+    //         for (int t_i = 0; t_i < threads; t_i++) {   // 遍历host的每个线程
+    //             if(this->partition_id == 0) {
+    //                 std::cout << "[DEBUG] 处理线程 " << t_i << std::endl;
+    //             }
+
+    //             tuned_chunks_dense[i][t_i].status = WORKING;   // 赋值status为WORKING
+    //             int s_i = get_socket_id(t_i);     // 线程在第几个socket
+    //             int s_j = get_socket_offset(t_i);  // 线程是本socket的第几个
+
+    //             if(this->partition_id == 0) {
+    //                 std::cout << "[DEBUG] - socket_id: " << s_i << ", socket_offset: " << s_j <<
+    //                 std::endl;
+    //             }
+
+    //             if (s_j == 0) {
+    //                 VertexId p_v_i = 0;
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 查找分区起始点..." << std::endl;
+    //                 }
+
+    //                 // 找到分区起始点
+    //                 while (p_v_i < compressed_incoming_adj_vertices[s_i]) {
+    //                     VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
+    //                     if (v_i >= partition_offset[i]) {
+    //                         break;
+    //                     }
+    //                     p_v_i++;
+    //                 }
+    //                 last_p_v_i = p_v_i;
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 查找分区终止点..." << std::endl;
+    //                 }
+
+    //                 // 找到分区结束点
+    //                 while (p_v_i < compressed_incoming_adj_vertices[s_i]) {
+    //                     VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
+    //                     if (v_i >= partition_offset[i + 1]) {
+    //                         break;
+    //                     }
+    //                     p_v_i++;
+    //                 }
+    //                 end_p_v_i = p_v_i;
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 分区范围: [" << last_p_v_i << ", " << end_p_v_i
+    //                     << "]" << std::endl;
+    //                 }
+
+    //                 // 计算边数
+    //                 remained_edges = 0;
+    //                 for (VertexId p_v_i = last_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
+    //                     EdgeId edges = compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+    //                                  compressed_incoming_adj_index[s_i][p_v_i].index;
+    //                     remained_edges += edges + alpha;
+    //                 }
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 计算得到剩余边数: " << remained_edges <<
+    //                     std::endl;
+    //                 }
+    //             }
+
+    //             tuned_chunks_dense[i][t_i].curr = last_p_v_i;
+    //             tuned_chunks_dense[i][t_i].end = last_p_v_i;
+    //             remained_partitions = threads_per_socket - s_j;
+    //             EdgeId expected_chunk_size = remained_edges / remained_partitions;
+
+    //             if(this->partition_id == 0) {
+    //                 std::cout << "[DEBUG] - 剩余分区数: " << remained_partitions
+    //                          << ", 期望块大小: " << expected_chunk_size << std::endl;
+    //             }
+
+    //             if (remained_partitions == 1) {
+    //                 tuned_chunks_dense[i][t_i].end = end_p_v_i;
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 最后一个分区, 直接设置end为: " << end_p_v_i <<
+    //                     std::endl;
+    //                 }
+    //             } else {
+    //                 EdgeId got_edges = 0;
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 开始计算合适的终止点..." << std::endl;
+    //                 }
+
+    //                 for (VertexId p_v_i = last_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
+    //                     got_edges += compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+    //                                 compressed_incoming_adj_index[s_i][p_v_i].index + alpha;
+    //                     if (got_edges >= expected_chunk_size) {
+    //                         tuned_chunks_dense[i][t_i].end = p_v_i;
+    //                         last_p_v_i = tuned_chunks_dense[i][t_i].end;
+
+    //                         if(this->partition_id == 0) {
+    //                             std::cout << "[DEBUG] - 找到合适的终止点: " << p_v_i
+    //                                      << ", 边数: " << got_edges << std::endl;
+    //                         }
+    //                         break;
+    //                     }
+    //                 }
+
+    //                 got_edges = 0;
+    //                 for (VertexId p_v_i = tuned_chunks_dense[i][t_i].curr;
+    //                      p_v_i < tuned_chunks_dense[i][t_i].end;
+    //                      p_v_i++) {
+    //                     got_edges += compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+    //                                compressed_incoming_adj_index[s_i][p_v_i].index + alpha;
+    //                 }
+    //                 remained_edges -= got_edges;
+
+    //                 if(this->partition_id == 0) {
+    //                     std::cout << "[DEBUG] - 最终分配结果:" << std::endl
+    //                              << "         curr = " << tuned_chunks_dense[i][t_i].curr <<
+    //                              std::endl
+    //                              << "         end = " << tuned_chunks_dense[i][t_i].end <<
+    //                              std::endl
+    //                              << "         分配边数 = " << got_edges << std::endl
+    //                              << "         剩余边数 = " << remained_edges << std::endl;
+    //                 }
+    //             }
+    //         }
+    //     }
+
+    //     if(this->partition_id == 0) {
+    //         std::cout << "[DEBUG] ====== tune_chunks 执行完成 ======\n" << std::endl;
+    //     }
+    // }
+
     void tune_chunks() {
         tuned_chunks_dense = new ThreadState*[partitions];
         int current_send_part_id = partition_id;
@@ -2240,14 +2551,6 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                 }
             }
         }
-        // if(partition_id==0){
-        //   for (int i=0;i<partitions;i++){
-        //     for(int j=0;j<threads;j++){
-        //       printf("part:%d thread:%d curr:%d
-        //       end:%d\n",i,j,tuned_chunks_dense[i][j].curr,tuned_chunks_dense[i][j].end);
-        //     }
-        //   }
-        // }
     }
 
     // 对于acrive中的点执行process任务，启用了工作窃取
@@ -2296,6 +2599,7 @@ bool load_preprocessed_graph(const std::string& base_filename) {
             }
             // 当前线程的任务处理完后，将状态设置为 STEALING，表示它可能会去“偷取”其他线程的任务
             thread_state[thread_id]->status = STEALING;
+
             for (int t_offset = 1; t_offset < threads; t_offset++) {
                 int t_i = (thread_id + t_offset) % threads;
                 while (thread_state[t_i]->status !=
@@ -2612,9 +2916,10 @@ bool load_preprocessed_graph(const std::string& base_filename) {
         // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
         // }
         size_t basic_chunk = 64;
-// #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
+        // #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
         // MPI_Allgather(
-        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T, MPI_COMM_WORLD);
+        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T,
+        //     MPI_COMM_WORLD);
         // 创建 indices 数组并填充
         // std::vector<int> indices;
         // for (int i = 0; i < partitions; i++) {
@@ -2628,10 +2933,11 @@ bool load_preprocessed_graph(const std::string& base_filename) {
         //     return process_data_size[a] > process_data_size[b];   // 从大到小排序
         // });
 
-        // INFO("process_data_size: {} {} {} {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
+        // INFO("process_data_size: {} {} {}
+        // {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
         // 初始化完成后再进行操作
         // MPI_Barrier(MPI_COMM_WORLD);
-// #endif
+        // #endif
         if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
             if (partition_id == 0) {
@@ -2677,8 +2983,10 @@ bool load_preprocessed_graph(const std::string& base_filename) {
             }
             MPI_Barrier(MPI_COMM_WORLD);
             // MPI_Allgather(
-            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size, 1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
-            // INFO("process_data_size: {} {} {} {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
+            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size,
+            //     1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
+            // INFO("process_data_size: {} {} {}
+            // {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
             std::sort(indices.begin(), indices.end(), [&](int a, int b) {
                 // return process_data_size[a] > process_data_size[b];   // 从大到小排序
                 return send_count[a][a][0] > send_count[b][b][0];
@@ -2703,12 +3011,14 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                 //             memcpy(
                 //                 gim_recv_buffer[i][partition_id][s_i]->data,
                 //                 gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //                 sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
+                //                 sizeof(MsgUnit<M>) *
+                //                 send_count[partition_id][partition_id][s_i]);
                 //             // if(sizeof(MsgUnit<M>)
                 //             // *send_count[partition_id][partition_id][s_i]>0)
 
-                //             // hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //             //                 (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                //             //
+                //             hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
+                //             // (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
                 //             //                 sizeof(MsgUnit<M>) *
                 //             // send_count[partition_id][partition_id][s_i],partition_id );
                 //             completion_tags[i][partition_id][s_i]->store(true,
@@ -2718,7 +3028,7 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                 //     }
                 // }
 
-                for(int i : indices){
+                for (int i : indices) {
                     for (int s_i = 0; s_i < sockets; s_i++) {
                         // length_array == 0才进入if，但是不代表更新后的值不是0
                         if (!__sync_val_compare_and_swap(
@@ -2731,20 +3041,27 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                             //     gim_send_buffer[partition_id][partition_id][s_i]->data,
                             //     sizeof(MsgUnit<M>) *
                             //     send_count[partition_id][partition_id][s_i]);
-                            if(send_count[partition_id][partition_id][s_i] > 0)
+                            if (send_count[partition_id][partition_id][s_i] > 0)
 
-                            //
-                            if(sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][partition_id][s_i],partition_id );
-                            else memcpy(
-                                gim_recv_buffer[i][partition_id][s_i]->data,
-                                gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][partition_id][s_i]);
-                            // INFO("{} to {} SPARSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i]);
+                                //
+                                if (sizeof(MsgUnit<M>) *
+                                        send_count[partition_id][partition_id][s_i] >
+                                    DMA_SIZE)
+                                    hl_DMA_memcpy_sync_test(
+                                        (uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]
+                                            ->data,
+                                        (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                        sizeof(MsgUnit<M>) *
+                                            send_count[partition_id][partition_id][s_i],
+                                        partition_id);
+                                else
+                                    memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                           gim_send_buffer[partition_id][partition_id][s_i]->data,
+                                           sizeof(MsgUnit<M>) *
+                                               send_count[partition_id][partition_id][s_i]);
+                            // INFO("{} to {} SPARSE PUT SIZE IS
+                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                            // send_count[partition_id][partition_id][s_i]);
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
                         }
@@ -2779,39 +3096,42 @@ bool load_preprocessed_graph(const std::string& base_filename) {
 
                 std::vector<bool> executed(partitions, false);
                 bool all_finished = false;
-                while(!all_finished){
+                while (!all_finished) {
                     all_finished = true;
-                    for(int i : indices){
-                        if(executed[i]){
+                    for (int i : indices) {
+                        if (executed[i]) {
                             continue;
                         }
-                        if(!available[i][i].load()){
+                        if (!available[i][i].load()) {
                             all_finished = false;
                             continue;
                         }
                         // sequence.push_back(i);
                         for (int s_i = 0; s_i < sockets; s_i++) {
                             if (send_count[i][i][s_i] &&
-                                !__sync_val_compare_and_swap(
-                                    &length_array[partition_id][i][s_i], 0,
-                                    send_count[i][i][s_i])) {
+                                !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
+                                                             0,
+                                                             send_count[i][i][s_i])) {
                                 // memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                                 //     gim_send_buffer[i][i][s_i]->data,
                                 //     sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                if(sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[i][i][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[i][i][s_i],partition_id );
-                                else memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                    gim_send_buffer[i][i][s_i]->data,
-                                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                completion_tags[partition_id][i][s_i]->store(true,
-                                                                            std::memory_order_release);
+                                if (sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
+                                    hl_DMA_memcpy_sync_test(
+                                        (uint8_t*)gim_send_buffer[i][i][s_i]->data,
+                                        (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
+                                        sizeof(MsgUnit<M>) * send_count[i][i][s_i],
+                                        partition_id);
+                                else
+                                    memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                                           gim_send_buffer[i][i][s_i]->data,
+                                           sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                completion_tags[partition_id][i][s_i]->store(
+                                    true, std::memory_order_release);
 
-                                // INFO("{} from {} SPARSE GET SIZE IS  {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                                // INFO("{} from {} SPARSE GET SIZE IS
+                                // {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
                                 // success.push_back(1);
-                            }else{
+                            } else {
                                 // success.push_back(0);
                             }
                         }
@@ -3372,15 +3692,19 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                             //        gim_send_buffer[partition_id][i][s_i]->data,
                             //        sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
 
-                            if(sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
-                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                                sizeof(MsgUnit<M>) *
-                                send_count[partition_id][i][s_i],partition_id );
-                            else   memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
-                                   gim_send_buffer[partition_id][i][s_i]->data,
-                                   sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
-                            // INFO("{} to {} DENSE PUT SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                            if (sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test(
+                                    (uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
+                                    (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                    sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
+                                    partition_id);
+                            else
+                                memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                       gim_send_buffer[partition_id][i][s_i]->data,
+                                       sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                            // INFO("{} to {} DENSE PUT SIZE IS
+                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                            // send_count[partition_id][i][s_i]);
 
                             completion_tags[i][partition_id][s_i]->store(true,
                                                                          std::memory_order_release);
@@ -3407,7 +3731,9 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                 //                    gim_send_buffer[i][partition_id][s_i]->data,
                 //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS
+                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                //             send_count[i][partition_id][s_i]);
                 //             completion_tags[partition_id][i][s_i]->store(true,
                 //                                                          std::memory_order_release);
                 //         }
@@ -3442,11 +3768,14 @@ bool load_preprocessed_graph(const std::string& base_filename) {
                 //     for (int s_i = 0; s_i < sockets; s_i++) {
                 //         if (send_count[i][partition_id][s_i] &&
                 //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][partition_id][s_i])) {
+                //                 &length_array[partition_id][i][s_i], 0,
+                //                 send_count[i][partition_id][s_i])) {
                 //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
                 //                    gim_send_buffer[i][partition_id][s_i]->data,
                 //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS
+                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                //             send_count[i][partition_id][s_i]);
                 //             completion_tags[partition_id][i][s_i]->store(true,
                 //                                                          std::memory_order_release);
                 //         }

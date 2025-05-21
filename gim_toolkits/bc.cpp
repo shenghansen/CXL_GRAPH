@@ -552,7 +552,27 @@ int main(int argc, char** argv) {
     Graph<Empty>* graph;
     graph = new Graph<Empty>();
     VertexId root = std::atoi(argv[3]);
-    graph->load_directed(argv[1], std::atoi(argv[2]));
+    VertexId vertices = std::atoi(argv[2]);
+    std::string base_filename = argv[1];
+    bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
+    if (!loaded_from_preprocessed) {
+        // if (graph->get_partition_id() == 0) {
+        //     printf("Loading graph from original file: %s\n", base_filename.c_str());
+        // }
+        // 根据图是否有向或对称选择加载函数
+        graph->load_directed(base_filename, vertices);   // 或者 load_undirected_from_directed
+
+        // 可选：在第一次加载后保存预处理文件
+        // if (graph->get_partition_id() == 0) {
+        //     printf("Saving preprocessed graph data...\n");
+        // }
+        // graph->save_preprocessed_graph(base_filename);
+        // if (graph->get_partition_id() == 0) {
+        //     printf("Finished saving preprocessed graph data.\n");
+        // }
+    }
+    
+    // graph->load_directed(argv[1], std::atoi(argv[2]));
 
 #if COMPACT
     compute_compact(graph, root);
@@ -561,26 +581,28 @@ int main(int argc, char** argv) {
         compute(graph, root);
     }
 #endif
-    // for (int run=0;run<5;run++) {
-    //   #if COMPACT
-    //   compute_compact(graph, root);
-    //   #else
-    //   compute(graph, root);
-    //   #endif
-    // }
     double average_time = 0;
     for (auto i : times) {
         average_time += i;
     }
     average_time /= EXEC_TIMES;
 
+#if OUTPUT_LEVEL == 0
     if (graph->partition_id == 0) {
         printf("exec_time=%lf(s)\n", exec_time);
     }
     printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
            graph->print_total_process_time() / EXEC_TIMES);
-
+#elif OUTPUT_LEVEL == 1
+    printf("partiton_id: %d, average  =%lf(s)\n", graph->get_partition_id(), average_time);
+#elif OUTPUT_LEVEL == 2
+    double max_average_time = 0;
+    MPI_Allreduce(&average_time, &max_average_time, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (graph->partition_id == 0) {
+        printf("%lf\n", max_average_time);
+    }
+#endif
     delete graph;
     return 0;
 }
