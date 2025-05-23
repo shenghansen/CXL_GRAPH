@@ -62,6 +62,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
                          ptr++) {
                         VertexId dst = ptr->neighbour;
                         Weight relax_dist = msg + ptr->edge_data;
+                        CXL_PREFETCH
                         if (relax_dist < distance[dst]) {
                             if (write_min(&distance[dst], relax_dist)) {
                                 active_out->set_bit(dst);
@@ -76,6 +77,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
                          ptr++) {
                         VertexId dst = ptr->neighbour;
                         Weight relax_dist = msg + ptr->edge_data;
+                        CXL_PREFETCH
                         if (relax_dist < global_distance[partition_id][dst]) {
                             if (write_min(&global_distance[partition_id][dst], relax_dist)) {
                                 global_active_out[partition_id]->set_bit(dst);
@@ -94,6 +96,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
                         VertexId src = ptr->neighbour;
                         // if (active_in->get_bit(src)) {
                         Weight relax_dist = distance[src] + ptr->edge_data;
+                        CXL_PREFETCH
                         if (relax_dist < msg) {
                             msg = relax_dist;
                         }
@@ -106,6 +109,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
                          ptr++) {
                         VertexId src = ptr->neighbour;
                         // if (active_in->get_bit(src)) {
+                        CXL_PREFETCH
                         Weight relax_dist = global_distance[partition_id][src] + ptr->edge_data;
                         if (relax_dist < msg) {
                             msg = relax_dist;

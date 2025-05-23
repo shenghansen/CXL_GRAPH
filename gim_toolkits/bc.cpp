@@ -84,6 +84,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
+                        CXL_PREFETCH
                         if (!visited->get_bit(dst)) {
                             if (num_paths[dst] == 0) {
                                 active_out->set_bit(dst);
@@ -95,6 +96,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 } else {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
+                        CXL_PREFETCH
                         if (!global_visited[partition_id]->get_bit(dst)) {
                             if (global_num_paths[partition_id][dst] == 0) {
                                 global_active_out[partition_id]->set_bit(dst);
@@ -111,6 +113,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         if (active_in->get_bit(src)) {
                             sum += num_paths[src];
                         }
@@ -123,6 +126,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         if (global_active_in[partition_id]->get_bit(src)) {
                             sum += global_num_paths[partition_id][src];
                         }
@@ -594,6 +598,7 @@ int main(int argc, char** argv) {
     printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
            graph->print_total_process_time() / EXEC_TIMES);
+    printf("partiton_id: %d, average  =%lf(s)\n", graph->get_partition_id(), average_time);
 #elif OUTPUT_LEVEL == 1
     printf("partiton_id: %d, average  =%lf(s)\n", graph->get_partition_id(), average_time);
 #elif OUTPUT_LEVEL == 2

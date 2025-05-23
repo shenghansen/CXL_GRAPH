@@ -89,12 +89,14 @@ void compute(Graph<Empty>* graph, int iterations) {
                 if (partition_id==-1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
+                        CXL_PREFETCH
                         write_add(&next[dst], msg);
                     }
                     return 0;
                 }else{
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
+                        CXL_PREFETCH
                         write_add(&global_next[partition_id][dst], msg);
                     }
                     return 0;
@@ -105,6 +107,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         sum += curr[src];
                     }
                     graph->emit(dst, sum);
@@ -112,6 +115,7 @@ void compute(Graph<Empty>* graph, int iterations) {
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         sum += global_curr[partition_id][src];
                     }
                     graph->emit_other(dst, sum,partition_id);
@@ -239,6 +243,7 @@ int main(int argc, char** argv) {
     graph = new Graph<Empty>();
     VertexId vertices = std::atoi(argv[2]);
     std::string base_filename = argv[1];
+    // bool loaded_from_preprocessed = graph->load_preprocessed_graph_mmap(base_filename);
     bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
     if (!loaded_from_preprocessed) {
         // if (graph->get_partition_id() == 0) {

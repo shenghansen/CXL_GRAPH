@@ -68,6 +68,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
                    VertexId activated = 0;
                    for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                        VertexId dst = ptr->neighbour;
+                       CXL_PREFETCH
                        if (parent[dst] == graph->vertices &&
                            cas(&parent[dst], graph->vertices, src)) {
                            active_out->set_bit(dst);
@@ -79,6 +80,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
                    VertexId activated = 0;
                    for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                        VertexId dst = ptr->neighbour;
+                       CXL_PREFETCH
                        if (global_parent[partition_id][dst] == graph->vertices &&
                            cas(&global_parent[partition_id][dst], graph->vertices, src)) {
                            global_active_out[partition_id]->set_bit(dst);
@@ -93,6 +95,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
                     if (visited->get_bit(dst)) return;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         if (active_in->get_bit(src)) {
                             graph->emit(dst, src);
                             break;
@@ -102,6 +105,7 @@ void compute(Graph<Empty> * graph, VertexId root) {
                     if (global_visited[partition_id]->get_bit(dst)) return;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
+                        CXL_PREFETCH
                         if (global_active_in[partition_id]->get_bit(src)) {
                             graph->emit_other(dst, src,partition_id);
                             break;

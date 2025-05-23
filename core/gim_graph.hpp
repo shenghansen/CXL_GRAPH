@@ -31,6 +31,12 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #define OUTPUT_LEVEL 0
 #endif
 
+#ifdef PREFETCH
+#    define CXL_PREFETCH _mm_prefetch(ptr + 2, _MM_HINT_T0);
+#else
+#    define CXL_PREFETCH
+#endif
+
 
 #include <fcntl.h>
 #include <malloc.h>
@@ -42,7 +48,9 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1143,12 +1151,254 @@ public:
      * @return false 如果预处理文件不存在或加载失败，此时应调用原始的load_directed。
      */
 
+    // 原 read_data_from_stream 函数改为基于内存指针的读取
+    template<typename T> void read_data_from_buffer(char*& buffer_ptr, T* data, size_t count) {
+        size_t bytes = sizeof(T) * count;
+        memcpy(data, buffer_ptr, bytes);
+        buffer_ptr += bytes;
+    }
+
+    // 模板特化用于单个值
+    template<typename T> void read_data_from_buffer(char*& buffer_ptr, T* data) {
+        memcpy(data, buffer_ptr, sizeof(T));
+        buffer_ptr += sizeof(T);
+    }
+    // bool load_preprocessed_graph(const std::string& base_filename) {
+    //     if (this->partition_id == -1) return false;
+
+    //     std::string filename =
+    //         base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
+
+    //     // 1. 打开文件并获取文件描述符
+    //     int fd = open(filename.c_str(), O_RDONLY);
+    //     if (fd == -1) {
+    //         // std::cerr << "错误：打开文件失败: " << filename << " (" << strerror(errno) << ")"
+    //         //           << std::endl;
+    //         return false;
+    //     }
+
+    //     // 2. 获取文件大小
+    //     struct stat sb;
+    //     if (fstat(fd, &sb) == -1) {
+    //         std::cerr << "错误：获取文件大小失败: " << filename << " (" << strerror(errno) << ")"
+    //                   << std::endl;
+    //         close(fd);
+    //         return false;
+    //     }
+    //     size_t file_size = sb.st_size;
+
+    //     // 3. 内存映射文件
+    //     char* file_data =
+    //         static_cast<char*>(mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0));
+    //     if (file_data == MAP_FAILED) {
+    //         std::cerr << "错误：内存映射文件失败: " << filename << " (" << strerror(errno) << ")"
+    //                   << std::endl;
+    //         close(fd);
+    //         return false;
+    //     }
+
+    //     char* ptr = file_data;
+
+    //     // 1. 读取元数据
+    //     read_data_from_buffer(ptr, &this->vertices, 1);
+    //     read_data_from_buffer(ptr, &this->edges, 1);
+    //     read_data_from_buffer(ptr, &this->owned_vertices, 1);
+    //     read_data_from_buffer(ptr, &this->symmetric, 1);
+    //     read_data_from_buffer(ptr, &this->sockets, 1);
+
+    //     this->partition_offset = new VertexId[this->partitions + 1];
+    //     read_data_from_buffer(ptr, this->partition_offset, this->partitions + 1);
+    //     this->local_partition_offset = new VertexId[this->sockets + 1];
+    //     read_data_from_buffer(ptr, this->local_partition_offset, this->sockets + 1);
+
+    //     read_data_from_buffer(ptr, &this->outgoing_adj_list_global_max, 1);
+    //     read_data_from_buffer(ptr, &this->incoming_adj_list_global_max, 1);
+    //     read_data_from_buffer(ptr, &this->compressed_outgoing_adj_index_global_max, 1);
+    //     read_data_from_buffer(ptr, &this->compressed_incoming_adj_index_global_max, 1);
+
+    //     // if (partition_id==0) {
+    //     //     std::cout << "1. read metadata done" << std::endl;
+    //     // }
+
+    //     // 2. 分配并读取度信息 (分配到CXL SHM)
+    //     if (!this->gim_out_degree)
+    //         this->gim_out_degree = new VertexId*[this->partitions];   // 初始化为 nullptr
+    //     for (int i = 0; i < this->partitions; i++) {
+    //         this->gim_out_degree[i] =
+    //             (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, i);
+    //     }
+    //     this->out_degree = this->gim_out_degree[this->partition_id];
+    //     if (this->out_degree)
+    //         read_data_from_buffer(ptr, this->out_degree, this->vertices);
+    //     else {
+    //         std::cerr << "错误: out_degree CXL SHM 分配失败。" << std::endl;
+    //         goto cleanup;
+    //         return false;
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     if (!this->gim_in_degree) this->gim_in_degree = new VertexId*[this->partitions]();
+    //     for (int i = 0; i < this->partitions; i++) {
+    //         this->gim_in_degree[i] =
+    //             (VertexId*)this->cxl_shm->GIM_malloc(sizeof(VertexId) * this->vertices, i);
+    //     }
+    //     this->in_degree = this->gim_in_degree[this->partition_id];
+    //     if (this->in_degree)
+    //         read_data_from_buffer(ptr, this->in_degree, this->vertices);
+    //     else {
+    //         std::cerr << "错误: in_degree CXL SHM 分配失败。" << std::endl;
+    //         goto cleanup;
+    //         return false;
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     // if(partition_id==0){
+    //     //     std::cout << "2. read degree done" << std::endl;
+    //     // }
+
+    //     // 3. 分配并读取每个NUMA socket的邻接表相关数据 (outgoing)
+    //     if (!this->outgoing_edges) this->outgoing_edges = new EdgeId[this->sockets];
+    //     gim_outgoing_adj_bitmap = new Bitmap**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_outgoing_adj_bitmap[p_i] = new Bitmap*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+    //                 sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+    //             gim_outgoing_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     outgoing_adj_bitmap = gim_outgoing_adj_bitmap[partition_id];
+
+    //     gim_outgoing_adj_index = new EdgeId**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_outgoing_adj_index[p_i][s_i] =
+    //                 (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     outgoing_adj_index = gim_outgoing_adj_index[partition_id];
+
+    //     gim_outgoing_adj_list = new AdjUnit<EdgeData>**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_outgoing_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_outgoing_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(
+    //                 outgoing_adj_list_global_max * unit_size);
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     outgoing_adj_list = gim_outgoing_adj_list[partition_id];
+
+    //     compressed_outgoing_adj_vertices = new VertexId[sockets];
+    //     gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_compressed_outgoing_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_compressed_outgoing_adj_index[p_i][s_i] =
+    //                 (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+    //                     (compressed_outgoing_adj_index_global_max + 1) *
+    //                     sizeof(CompressedAdjIndexUnit));
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     compressed_outgoing_adj_index = gim_compressed_outgoing_adj_index[partition_id];
+    //     MPI_Barrier(MPI_COMM_WORLD);
+
+    //     for (int s_i = 0; s_i < this->sockets; ++s_i) {
+    //         read_data_from_buffer(ptr, &this->outgoing_edges[s_i], 1);
+    //         read_data_from_buffer(ptr, this->outgoing_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+    //         read_data_from_buffer(ptr, this->outgoing_adj_index[s_i], this->vertices + 1);
+    //         read_data_from_buffer(ptr, this->outgoing_adj_list[s_i], outgoing_adj_list_global_max * unit_size);
+    //         read_data_from_buffer(ptr, &this->compressed_outgoing_adj_vertices[s_i], 1);
+    //         read_data_from_buffer(ptr, this->compressed_outgoing_adj_index[s_i], compressed_outgoing_adj_index_global_max + 1);
+    //     }
+    //     // if (partition_id==0) {
+    //     //     std::cout << "3. read outgoing adj done" << std::endl;
+    //     // }
+
+    //     // 4. 分配并读取每个NUMA socket的邻接表相关数据 (incoming)
+    //     // 注意：这里的逻辑与 outgoing 的处理类似
+    //     if (!this->incoming_edges) this->incoming_edges = new EdgeId[this->sockets]();
+    //     gim_incoming_adj_bitmap = new Bitmap**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_incoming_adj_bitmap[p_i] = new Bitmap*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             unsigned long* data = (unsigned long*)cxl_shm->GIM_malloc(
+    //                 sizeof(unsigned long) * (WORD_OFFSET(vertices) + 1), p_i);
+    //             gim_incoming_adj_bitmap[p_i][s_i] = new Bitmap(vertices, data);
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     incoming_adj_bitmap = gim_incoming_adj_bitmap[partition_id];
+    //     gim_incoming_adj_index = new EdgeId**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_incoming_adj_index[p_i] = new EdgeId*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_incoming_adj_index[p_i][s_i] =
+    //                 (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+    //         }
+    //     }
+    //     incoming_adj_index = gim_incoming_adj_index[partition_id];
+    //     gim_incoming_adj_list = new AdjUnit<EdgeData>**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_incoming_adj_list[p_i] = new AdjUnit<EdgeData>*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)cxl_shm->CXL_SHM_malloc(
+    //                 incoming_adj_list_global_max * unit_size);
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     incoming_adj_list = gim_incoming_adj_list[partition_id];
+    //     compressed_incoming_adj_vertices = new VertexId[sockets];
+    //     gim_compressed_incoming_adj_index = new CompressedAdjIndexUnit**[partitions];
+    //     for (size_t p_i = 0; p_i < partitions; p_i++) {
+    //         gim_compressed_incoming_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
+    //         for (size_t s_i = 0; s_i < sockets; s_i++) {
+    //             gim_compressed_incoming_adj_index[p_i][s_i] =
+    //                 (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
+    //                     (compressed_incoming_adj_index_global_max + 1) *
+    //                     sizeof(CompressedAdjIndexUnit));
+    //         }
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    //     for (int s_i = 0; s_i < this->sockets; ++s_i) {
+    //         read_data_from_buffer(ptr, &this->incoming_edges[s_i], 1);
+    //         read_data_from_buffer(ptr, this->incoming_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
+    //         read_data_from_buffer(ptr, this->incoming_adj_index[s_i], this->vertices + 1);
+    //         read_data_from_buffer(ptr, this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
+    //         read_data_from_buffer(ptr, &this->compressed_incoming_adj_vertices[s_i], 1);
+    //         read_data_from_buffer(ptr, this->compressed_incoming_adj_index[s_i], compressed_incoming_adj_index_global_max + 1);
+    //     }
+    //     // 8. 检查是否读取完整个文件
+    //     if (ptr > file_data + file_size) {
+    //         std::cerr << "错误：文件读取超出范围，可能数据损坏。" << std::endl;
+    //         goto cleanup;
+    //     }
+
+    // cleanup:
+    //     if (munmap(file_data, file_size) == -1) {
+    //         std::cerr << "错误：释放内存映射失败 (" << strerror(errno) << ")" << std::endl;
+    //     }
+    //     close(fd);
+    //     transpose();
+    //     tune_chunks();   // tuned_chunks_dense init
+    //     transpose();     // exchange tuned_chunks_dense and tuned_chunks_sparse
+    //     // tuned_chunks_sparse = tuned_chunks_dense
+    //     tune_chunks();   // tuned_chunks_dense init
+    //     // gim_buffer
+    //     init_gim_buffer();
+    //     // if (this->partition_id == 0) {
+    //     //     std::cout << "分区 " << this->partition_id << " 的预处理图数据加载并初始化完成。"
+    //     //               << std::endl;
+    //     // }
+    //      return true;
+    // }
     bool load_preprocessed_graph(const std::string& base_filename) {
-        if (this->partition_id == -1) {
-            if (this->partition_id == 0)
-                std::cerr << "错误：加载前 partition_id 未初始化。" << std::endl;
+        if (this->partition_id == -1) 
             return false;
-        }
 
         std::string filename =
             base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
@@ -1238,8 +1488,11 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_outgoing_adj_index[p_i][s_i] =
-                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+                // gim_outgoing_adj_index[p_i][s_i] =
+                //     (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+
+                gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
+                    sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -1305,8 +1558,10 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_incoming_adj_index[p_i] = new EdgeId*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_incoming_adj_index[p_i][s_i] =
-                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+                // gim_incoming_adj_index[p_i][s_i] =
+                    // (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+                gim_incoming_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
+                    sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
             }
         }
         incoming_adj_index = gim_incoming_adj_index[partition_id];
@@ -1591,11 +1846,11 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_outgoing_adj_index[p_i][s_i] =
-                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+                // gim_outgoing_adj_index[p_i][s_i] =
+                //     (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
 
-                // gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
-                //     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
+                gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
+                    sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
             }
         }
         outgoing_adj_index = gim_outgoing_adj_index[partition_id];
@@ -2558,7 +2813,10 @@ public:
     template<typename R> R process_vertices(std::function<R(VertexId)> process, Bitmap* active) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
-
+        if (partition_id == 2) {
+            // dump_memory_maps();
+        }
+        
         R reducer = 0;
         size_t basic_chunk = 64;   // 每次处理的顶点数，和WORD的位数是对应的
         for (int t_i = 0; t_i < threads; t_i++) {
