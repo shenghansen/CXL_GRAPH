@@ -279,6 +279,7 @@ int main(int argc, char** argv) {
     printf("partiton_id: %d, total_process_time  =%lf(s)\n",
            graph->get_partition_id(),
            graph->print_total_process_time() / EXEC_TIMES);
+    printf("partiton_id: %d, average  =%lf(s)\n", graph->get_partition_id(), average_time);
 #elif OUTPUT_LEVEL == 1
     printf("partiton_id: %d, average  =%lf(s)\n", graph->get_partition_id(), average_time);
 #elif OUTPUT_LEVEL == 2

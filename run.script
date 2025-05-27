@@ -13,7 +13,7 @@ for ((i=0; i<$num_commands; i++)); do
   for ((j=0; j<$num_args; j++)); do
     command=${commands[$i]}
     param=${args[$j]}
-    # echo "run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores sudo  mpirun -np 4 --allow-run-as-root --map-by socket  $command $param"
+    echo "run: OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores sudo  mpirun -np 4 --allow-run-as-root --map-by socket  $command $param"
     OMP_NUM_THREADS=32 OMP_PROC_BIND=true OMP_PLACES=cores sudo mpirun --allow-run-as-root -np 4 --map-by socket $command $param
   done
 done

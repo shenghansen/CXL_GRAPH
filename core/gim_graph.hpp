@@ -32,13 +32,15 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #endif
 
 #ifdef PREFETCH
-#    define CXL_PREFETCH _mm_prefetch(ptr + 2, _MM_HINT_T0);
+#    define CXL_PREFETCH _mm_prefetch(ptr + 4, _MM_HINT_T0);
 #else
 #    define CXL_PREFETCH
 #endif
 
 
+#include <errno.h>
 #include <fcntl.h>
+#include <immintrin.h>
 #include <malloc.h>
 #include <numa.h>
 #include <omp.h>
@@ -50,7 +52,6 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <errno.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1587,8 +1588,8 @@ public:
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
-        compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
-        MPI_Barrier(MPI_COMM_WORLD);
+        // compressed_incoming_adj_index = gim_compressed_incoming_adj_index[partition_id];
+        // MPI_Barrier(MPI_COMM_WORLD);
         for (int s_i = 0; s_i < this->sockets; ++s_i) {
             read_data_from_stream(fin, &this->incoming_edges[s_i], 1);
             read_data_from_stream(
@@ -1598,8 +1599,17 @@ public:
                 fin, this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
             read_data_from_stream(fin, &this->compressed_incoming_adj_vertices[s_i], 1);
             read_data_from_stream(fin,
-                                  this->compressed_incoming_adj_index[s_i],
+                                  this->gim_compressed_incoming_adj_index[partition_id][s_i],
                                   compressed_incoming_adj_index_global_max+1);
+        }
+        compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
+        for (size_t s_i = 0; s_i < sockets; s_i++) {
+            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+                (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit),
+                s_i + partition_id * NUMA);
+            memcpy(compressed_incoming_adj_index[s_i],
+                   gim_compressed_incoming_adj_index[partition_id][s_i],
+                   (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit));
         }
         if (fin.eof()) {
             // 文件正常读到末尾
@@ -2365,8 +2375,6 @@ public:
                 gim_compressed_incoming_adj_index[p_i][s_i] =
                     (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
                         (global_max + 1) * sizeof(CompressedAdjIndexUnit));
-                // gim_incoming_adj_list[p_i][s_i] = (AdjUnit<EdgeData>*)malloc(
-                //     global_max*unit_size);
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -2552,6 +2560,16 @@ public:
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
+        // copy gim_compressed_incoming_adj_index
+        compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
+        for (size_t s_i = 0; s_i < sockets; s_i++) {
+            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+                (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit),
+                s_i + partition_id * NUMA);
+            memcpy(compressed_incoming_adj_index[s_i],
+                   gim_compressed_incoming_adj_index[partition_id][s_i],
+                   (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit));
+        }
 
         delete[] buffered_edges;
         delete[] send_buffer;
