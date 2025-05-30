@@ -2831,7 +2831,7 @@ public:
     template<typename R> R process_vertices(std::function<R(VertexId)> process, Bitmap* active) {
         double stream_time = 0;
         stream_time -= MPI_Wtime();
-        if (partition_id == 2) {
+        if (partition_id == 0) {
             // dump_memory_maps();
         }
         

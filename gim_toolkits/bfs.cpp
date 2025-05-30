@@ -230,6 +230,16 @@ int main(int argc, char ** argv) {
   if(graph->partition_id == 0) {
       printf("%lf\n", max_average_time);
   }
+#elif OUTPUT_LEVEL==3
+  printf("partiton_id: %d, total_process_time  =%lf(s)\n",
+         graph->get_partition_id(),
+         graph->print_total_process_time() / EXEC_TIMES);
+  double max_total_process_time = 0;
+  double total_process_time = graph->print_total_process_time() / EXEC_TIMES;
+  MPI_Allreduce(&total_process_time, &max_total_process_time, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  if (graph->partition_id == 0) {
+      printf("%lf\n", max_total_process_time);
+  }
 #endif
   //   delete graph;
   return 0;
