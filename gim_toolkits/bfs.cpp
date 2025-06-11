@@ -93,6 +93,8 @@ void compute(Graph<Empty> * graph, VertexId root) {
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 if(partition_id==-1){
                     if (visited->get_bit(dst)) return;
+#ifdef OMP_SIMD
+#endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
@@ -103,6 +105,8 @@ void compute(Graph<Empty> * graph, VertexId root) {
                     }
                 }else{
                     if (global_visited[partition_id]->get_bit(dst)) return;
+#ifdef OMP_SIMD
+#endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH

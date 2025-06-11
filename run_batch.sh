@@ -1,47 +1,47 @@
 echo "Running batch script"
 sudo accel-config config-user-default 
-output_log="output.log.56"
+output_log="output.log.59"
 if [ -f "$output_log" ]; then
     echo "Removing existing output log file: $output_log"
     rm "$output_log"
 fi
 
 
-# echo "#######################################################################" >> $output_log
-#  ./clear_shm.sh 
-# SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 "
-# cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
-# cmake --build build -- -v
-# ./run.script >> $output_log 2>&1
-#  ./clear_shm.sh 
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+ ./clear_shm.sh 
 
-# echo "#######################################################################" >> $output_log
-#  ./clear_shm.sh 
-# SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL "
-# cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
-# cmake --build build -- -v
-# ./run.script >> $output_log 2>&1
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL "
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
 
-# echo "#######################################################################" >> $output_log
-#  ./clear_shm.sh 
-# SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH"
-# cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
-# cmake --build build -- -v
-# ./run.script >> $output_log 2>&1
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
 
-# echo "#######################################################################" >> $output_log
-#  ./clear_shm.sh 
-# SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DSPARSE_MODE_UNIDIRECTIONAL -DDENSE_MODE_UNIDIRECTIONAL -DGET"
-# cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
-# cmake --build build -- -v
-# ./run.script >> $output_log 2>&1
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DSPARSE_MODE_UNIDIRECTIONAL -DDENSE_MODE_UNIDIRECTIONAL -DGET"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
 
-# echo "#######################################################################" >> $output_log
-#  ./clear_shm.sh 
-# SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DGLOBAL_STEALING_DENSE"
-# cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
-# cmake --build build -- -v
-# ./run.script >> $output_log 2>&1
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DGLOBAL_STEALING_DENSE"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
 
 echo "#######################################################################" >> $output_log
  ./clear_shm.sh 
@@ -51,6 +51,56 @@ cmake --build build -- -v
 ./run.script >> $output_log 2>&1 
 
 
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -O3"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+ ./clear_shm.sh 
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -O3"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -O3"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -O3 -DOMP_SIMD"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DSPARSE_MODE_UNIDIRECTIONAL -DDENSE_MODE_UNIDIRECTIONAL -DGET -O3 -DOMP_SIMD"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DGLOBAL_STEALING_DENSE -O3 -DOMP_SIMD"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1
+
+echo "#######################################################################" >> $output_log
+ ./clear_shm.sh 
+SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH -DSPARSE_MODE_UNIDIRECTIONAL -DDENSE_MODE_UNIDIRECTIONAL -DGET -DGLOBAL_STEALING_DENSE -O3 -DOMP_SIMD"
+cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"
+cmake --build build -- -v
+./run.script >> $output_log 2>&1 
 
 # SHELL_DEFINES_TO_ADD="-DEXEC_TIMES=10 -DCXL -DPREFETCH"
 # cmake -S . -B build -DDEFINES_TO_ADD="${SHELL_DEFINES_TO_ADD}"

@@ -111,6 +111,9 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 if(partition_id==-1){
                     if (visited->get_bit(dst)) return;
                     double sum = 0;
+#ifdef OMP_SIMD
+#    pragma omp simd reduction(+ : sum)
+#endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
@@ -124,6 +127,9 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 }else{
                     if (global_visited[partition_id]->get_bit(dst)) return;
                     double sum = 0;
+#ifdef OMP_SIMD
+#    pragma omp simd reduction(+ : sum)
+#endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH

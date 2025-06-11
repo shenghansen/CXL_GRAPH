@@ -91,30 +91,32 @@ void compute(Graph<Weight>* graph, VertexId root) {
             [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
                 if (partition_id == -1) {
                     Weight msg = 1e9;
+#ifdef OMP_SIMD
+#    pragma omp simd reduction(min : msg)
+#endif
                     for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
                          ptr++) {
                         VertexId src = ptr->neighbour;
-                        // if (active_in->get_bit(src)) {
                         Weight relax_dist = distance[src] + ptr->edge_data;
                         CXL_PREFETCH
                         if (relax_dist < msg) {
                             msg = relax_dist;
                         }
-                        // }
                     }
                     if (msg < 1e9) graph->emit(dst, msg);
                 } else {
                     Weight msg = 1e9;
+#ifdef OMP_SIMD
+#    pragma omp simd reduction(min : msg)
+#endif
                     for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
                          ptr++) {
                         VertexId src = ptr->neighbour;
-                        // if (active_in->get_bit(src)) {
                         CXL_PREFETCH
                         Weight relax_dist = global_distance[partition_id][src] + ptr->edge_data;
                         if (relax_dist < msg) {
                             msg = relax_dist;
                         }
-                        // }
                     }
                     if (msg < 1e9) graph->emit_other(dst, msg, partition_id);
                 }
@@ -168,7 +170,7 @@ int main(int argc, char** argv) {
     VertexId vertices = std::atoi(argv[2]);
     std::string base_filename = argv[1];
 
-    bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename+".with_data");
+    bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename + ".with_data");
     // bool loaded_from_preprocessed = false;
     if (!loaded_from_preprocessed) {
         // if (graph->get_partition_id() == 0) {

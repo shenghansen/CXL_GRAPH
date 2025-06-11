@@ -38,10 +38,10 @@ void compute(Graph<Empty>* graph, int iterations) {
     // double* curr = graph->alloc_vertex_array<double>();
     // double* next = graph->alloc_vertex_array<double>();
     // VertexSubset* active = graph->alloc_vertex_subset();
-    
-    active->fill();   //处理所有点
-    
-    //当前PR值除以出度
+
+    active->fill();   // 处理所有点
+
+    // 当前PR值除以出度
 #ifndef GLOBAL_STEALING_VERTICES
     double delta = graph->process_vertices<double>(
         [&](VertexId vtx) {
@@ -52,16 +52,16 @@ void compute(Graph<Empty>* graph, int iterations) {
             return (double)1;
         },
         active);
-        #else
+#else
     double delta = graph->process_vertices_global<double>(
-        [&](VertexId vtx,int partition_id) {
-            if(partition_id==-1){
+        [&](VertexId vtx, int partition_id) {
+            if (partition_id == -1) {
                 curr[vtx] = (double)1;
                 if (graph->out_degree[vtx] > 0) {
                     curr[vtx] /= graph->out_degree[vtx];
                 }
                 return (double)1;
-            }else{
+            } else {
                 global_curr[partition_id][vtx] = (double)1;
                 if (graph->gim_out_degree[partition_id][vtx] > 0) {
                     global_curr[partition_id][vtx] /= graph->gim_out_degree[partition_id][vtx];
@@ -70,30 +70,30 @@ void compute(Graph<Empty>* graph, int iterations) {
             }
         },
         global_active);
-        #endif
+#endif
     delta /= graph->vertices;
     for (int i_i = 0; i_i < iterations; i_i++) {
 #ifdef SHOW_RESULT
-        if (graph->partition_id==0) {
-          printf("delta(%d)=%lf\n", i_i, delta);
-        //   graph->print_process_data();
+        if (graph->partition_id == 0) {
+            printf("delta(%d)=%lf\n", i_i, delta);
+            //   graph->print_process_data();
         }
-        // printf("partition_id:%d, sequence:\n",graph->partition_id);
-        // graph->print_get_sequence();
-        #endif
+// printf("partition_id:%d, sequence:\n",graph->partition_id);
+// graph->print_get_sequence();
+#endif
         graph->fill_vertex_array(next, (double)0);
-        //稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
+        // 稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
         graph->process_edges<int, double>(
             [&](VertexId src) { graph->emit(src, curr[src]); },
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
-                if (partition_id==-1) {
+                if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
                         CXL_PREFETCH
                         write_add(&next[dst], msg);
                     }
                     return 0;
-                }else{
+                } else {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
                         CXL_PREFETCH
@@ -103,22 +103,42 @@ void compute(Graph<Empty>* graph, int iterations) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if(partition_id==-1){
-                    double sum = 0;
+                if (partition_id == -1) {
+                    float sum = 0.0f;
+#ifdef OMP_SIMD
+                    AdjUnit<Empty>* begin_ptr = incoming_adj.begin;
+                    size_t size = incoming_adj.end - incoming_adj.begin;
+#    pragma omp simd reduction(+ : sum)
+                    for (size_t i = 0; i < size; i++) {
+                        VertexId src = begin_ptr[i].neighbour;
+                        sum += curr[src];
+                    }
+#else
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
                         sum += curr[src];
                     }
+#endif
                     graph->emit(dst, sum);
-                }else{
-                    double sum = 0;
+                } else {
+                    float sum = 0.0f;
+#ifdef OMP_SIMD
+                    AdjUnit<Empty>* begin_ptr = incoming_adj.begin;
+                    size_t size = incoming_adj.end - incoming_adj.begin;
+#    pragma omp simd reduction(+ : sum)
+                    for (size_t i = 0; i < size; i++) {
+                        VertexId src = begin_ptr[i].neighbour;
+                        sum += global_curr[partition_id][src];
+                    }
+#else
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
                         sum += global_curr[partition_id][src];
                     }
-                    graph->emit_other(dst, sum,partition_id);
+#endif
+                    graph->emit_other(dst, sum, partition_id);
                 }
             },
             [&](VertexId dst, double msg) {
@@ -137,12 +157,12 @@ void compute(Graph<Empty>* graph, int iterations) {
 #else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
-                    if(partition_id==-1){
+                    if (partition_id == -1) {
                         next[vtx] = 1 - d + d * next[vtx];
-                    }else{
+                    } else {
                         global_next[partition_id][vtx] = 1 - d + d * global_next[partition_id][vtx];
                     }
-                    
+
                     return 0;
                 },
                 global_active);
@@ -162,14 +182,14 @@ void compute(Graph<Empty>* graph, int iterations) {
 #else
             delta = graph->process_vertices_global<double>(
                 [&](VertexId vtx, int partition_id) {
-                    if(partition_id==-1){
+                    if (partition_id == -1) {
                         next[vtx] = 1 - d + d * next[vtx];
                         if (graph->out_degree[vtx] > 0) {
                             next[vtx] /= graph->out_degree[vtx];
                             return fabs(next[vtx] - curr[vtx]) * graph->out_degree[vtx];
                         }
                         return fabs(next[vtx] - curr[vtx]);
-                    }else{
+                    } else {
                         global_next[partition_id][vtx] = 1 - d + d * global_next[partition_id][vtx];
                         if (graph->gim_out_degree[partition_id][vtx] > 0) {
                             global_next[partition_id][vtx] /=
@@ -181,14 +201,13 @@ void compute(Graph<Empty>* graph, int iterations) {
                         return fabs(global_next[partition_id][vtx] -
                                     global_curr[partition_id][vtx]);
                     }
-                    
                 },
                 global_active);
 #endif
         }
         delta /= graph->vertices;
         std::swap(curr, next);
-        std::swap(global_curr,global_next);
+        std::swap(global_curr, global_next);
     }
 
     exec_time += get_time();
@@ -202,11 +221,14 @@ void compute(Graph<Empty>* graph, int iterations) {
         graph->process_vertices<double>([&](VertexId vtx) { return curr[vtx]; }, active);
 #else
     double pr_sum = graph->process_vertices_global<double>(
-        [&](VertexId vtx, int partition_id) { if(partition_id==-1){
-            return curr[vtx];
-        }else{
-            return global_curr[partition_id][vtx];
-        } }, global_active);
+        [&](VertexId vtx, int partition_id) {
+            if (partition_id == -1) {
+                return curr[vtx];
+            } else {
+                return global_curr[partition_id][vtx];
+            }
+        },
+        global_active);
 #endif
 #ifdef SHOW_RESULT
     if (graph->partition_id == 0) {
@@ -302,4 +324,4 @@ int main(int argc, char** argv) {
 #endif
     delete graph;
     return 0;
-    }
+}

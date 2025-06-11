@@ -28,7 +28,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 // #define DMA_SIZE 0
 
 #ifndef OUTPUT_LEVEL
-#define OUTPUT_LEVEL 0
+#    define OUTPUT_LEVEL 0
 #endif
 
 #ifdef PREFETCH
@@ -58,6 +58,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <cstddef>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -80,7 +81,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 
 
-#define THREDAS 32
+#define THREADS 32
 #define NUMA SNC
 #define REMOTE_NUMA 7
 
@@ -324,7 +325,7 @@ public:
         // sockets = numa_num_configured_nodes();
         // threads_per_socket = threads / sockets;
         // for simulate
-        threads = THREDAS;
+        threads = THREADS;
         sockets = NUMA;
         threads_per_socket = threads / sockets;
         init();
@@ -380,6 +381,211 @@ public:
         printf(" , percentage : %lf%\n", double(size) / total_size * 100);
     }
 
+
+    enum DistributionLevel {
+        BASIC,      // 只有基础统计
+        DETAILED,   // 包含分布区间
+        ADVANCED    // 包含高级统计
+    };
+
+    /**
+     * @brief 分析当前分区内顶点的度数分布（MPI友好版本）
+     * @param level 统计详细程度
+     * @param output_to_file 是否输出到文件
+     */
+    void analyze_degree_distribution(DistributionLevel level = DETAILED,
+                                     bool output_to_file = false) {
+        if (partition_id == -1) {
+            std::cerr << "错误: partition_id 未初始化" << std::endl;
+            return;
+        }
+
+        // 1. 每个进程计算本地统计
+        VertexId local_vertices =
+            partition_offset[partition_id + 1] - partition_offset[partition_id];
+
+        VertexId local_min_out = UINT32_MAX, local_max_out = 0;
+        VertexId local_min_in = UINT32_MAX, local_max_in = 0;
+
+        unsigned long long local_total_out = 0, local_total_in = 0;
+        VertexId local_zero_out = 0, local_zero_in = 0;
+
+        // 计算本地统计
+        for (VertexId v_i = partition_offset[partition_id];
+             v_i < partition_offset[partition_id + 1];
+             v_i++) {
+            VertexId out_deg = out_degree[v_i];
+            VertexId in_deg = in_degree[v_i];
+
+            local_min_out = std::min(local_min_out, out_deg);
+            local_max_out = std::max(local_max_out, out_deg);
+            local_min_in = std::min(local_min_in, in_deg);
+            local_max_in = std::max(local_max_in, in_deg);
+
+            local_total_out += out_deg;
+            local_total_in += in_deg;
+
+            if (out_deg == 0) local_zero_out++;
+            if (in_deg == 0) local_zero_in++;
+        }
+
+        // 2. MPI收集所有进程的统计信息
+        struct LocalStats {
+            VertexId vertices;
+            VertexId min_out, max_out, min_in, max_in;
+            unsigned long long total_out, total_in;
+            VertexId zero_out, zero_in;
+            int partition_id;
+        };
+
+        LocalStats local_stats = {local_vertices,
+                                  local_min_out,
+                                  local_max_out,
+                                  local_min_in,
+                                  local_max_in,
+                                  local_total_out,
+                                  local_total_in,
+                                  local_zero_out,
+                                  local_zero_in,
+                                  partition_id};
+
+        LocalStats* all_stats = nullptr;
+        if (partition_id == 0) {
+            all_stats = new LocalStats[partitions];
+        }
+
+        // 收集所有进程的统计信息到主进程
+        MPI_Gather(&local_stats,
+                   sizeof(LocalStats),
+                   MPI_BYTE,
+                   all_stats,
+                   sizeof(LocalStats),
+                   MPI_BYTE,
+                   0,
+                   MPI_COMM_WORLD);
+
+        // 3. 只有主进程输出结果
+        if (partition_id == 0) {
+            std::ostream* output = &std::cout;
+            std::ofstream file_output;
+
+            if (output_to_file) {
+                std::string filename = "degree_distribution_all_partitions.txt";
+                file_output.open(filename);
+                output = &file_output;
+            }
+
+            *output << "=== 全图度数分布统计汇总 ===" << std::endl;
+            *output << "总分区数: " << partitions << std::endl;
+            *output << std::endl;
+
+            // 计算全局统计
+            VertexId global_vertices = 0;
+            VertexId global_min_out = UINT32_MAX, global_max_out = 0;
+            VertexId global_min_in = UINT32_MAX, global_max_in = 0;
+            unsigned long long global_total_out = 0, global_total_in = 0;
+            VertexId global_zero_out = 0, global_zero_in = 0;
+
+            for (int i = 0; i < partitions; i++) {
+                global_vertices += all_stats[i].vertices;
+                global_min_out = std::min(global_min_out, all_stats[i].min_out);
+                global_max_out = std::max(global_max_out, all_stats[i].max_out);
+                global_min_in = std::min(global_min_in, all_stats[i].min_in);
+                global_max_in = std::max(global_max_in, all_stats[i].max_in);
+                global_total_out += all_stats[i].total_out;
+                global_total_in += all_stats[i].total_in;
+                global_zero_out += all_stats[i].zero_out;
+                global_zero_in += all_stats[i].zero_in;
+            }
+
+            double global_avg_out = (double)global_total_out / global_vertices;
+            double global_avg_in = (double)global_total_in / global_vertices;
+
+            // 输出全局统计
+            *output << "=== 全局统计 ===" << std::endl;
+            *output << "总顶点数: " << global_vertices << std::endl;
+            *output << "总边数: " << global_total_out << std::endl;
+            *output << std::endl;
+
+            *output << "全局出度统计:" << std::endl;
+            *output << "  最小值: " << global_min_out << std::endl;
+            *output << "  最大值: " << global_max_out << std::endl;
+            *output << "  平均值: " << std::fixed << std::setprecision(2) << global_avg_out
+                    << std::endl;
+            *output << "  零度数顶点: " << global_zero_out << " (" << std::fixed
+                    << std::setprecision(1) << (100.0 * global_zero_out / global_vertices) << "%)"
+                    << std::endl;
+
+            *output << std::endl;
+            *output << "全局入度统计:" << std::endl;
+            *output << "  最小值: " << global_min_in << std::endl;
+            *output << "  最大值: " << global_max_in << std::endl;
+            *output << "  平均值: " << std::fixed << std::setprecision(2) << global_avg_in
+                    << std::endl;
+            *output << "  零度数顶点: " << global_zero_in << " (" << std::fixed
+                    << std::setprecision(1) << (100.0 * global_zero_in / global_vertices) << "%)"
+                    << std::endl;
+
+            if (level >= DETAILED) {
+                *output << std::endl << "=== 各分区详细统计 ===" << std::endl;
+                *output << std::left << std::setw(8) << "分区ID" << std::setw(12) << "顶点数"
+                        << std::setw(12) << "出边数" << std::setw(12) << "入边数" << std::setw(12)
+                        << "平均出度" << std::setw(12) << "平均入度" << std::setw(12) << "最大出度"
+                        << std::setw(12) << "最大入度" << std::endl;
+                *output << std::string(100, '-') << std::endl;
+
+                for (int i = 0; i < partitions; i++) {
+                    double avg_out = (double)all_stats[i].total_out / all_stats[i].vertices;
+                    double avg_in = (double)all_stats[i].total_in / all_stats[i].vertices;
+
+                    *output << std::left << std::setw(8) << all_stats[i].partition_id
+                            << std::setw(12) << all_stats[i].vertices << std::setw(12)
+                            << all_stats[i].total_out << std::setw(12) << all_stats[i].total_in
+                            << std::setw(12) << std::fixed << std::setprecision(1) << avg_out
+                            << std::setw(12) << std::fixed << std::setprecision(1) << avg_in
+                            << std::setw(12) << all_stats[i].max_out << std::setw(12)
+                            << all_stats[i].max_in << std::endl;
+                }
+            }
+
+            *output << std::endl << "=== 统计完成 ===" << std::endl;
+
+            if (output_to_file) {
+                file_output.close();
+                std::cout << "度数分布统计已保存到文件 degree_distribution_all_partitions.txt"
+                          << std::endl;
+            }
+
+            delete[] all_stats;
+        }
+
+        // 同步所有进程
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
+    // 简化版本的快速统计
+    void print_degree_summary() {
+        if (partition_id == -1) return;
+
+        VertexId local_vertices =
+            partition_offset[partition_id + 1] - partition_offset[partition_id];
+        unsigned long long total_out_edges = 0, total_in_edges = 0;
+
+        for (VertexId v_i = partition_offset[partition_id];
+             v_i < partition_offset[partition_id + 1];
+             v_i++) {
+            total_out_edges += out_degree[v_i];
+            total_in_edges += in_degree[v_i];
+        }
+
+        printf("分区 %d: 顶点=%u, 出边=%llu, 入边=%llu, 平均出度=%.2f, 平均入度=%.2f\n",
+               partition_id,
+               local_vertices,
+               total_out_edges,
+               total_in_edges,
+               (double)total_out_edges / local_vertices,
+               (double)total_in_edges / local_vertices);
+    }
     void printf_data_info() {
         data_size["out_degree"] = vertices * sizeof(VertexId);
         data_size["in_degree"] = vertices * sizeof(VertexId);
@@ -843,7 +1049,7 @@ public:
             std::cerr << "错误：从文件流读取 " << sizeof(T) * count << " 字节失败。" << std::endl;
         }
     }
-    
+
 
     // 辅助函数：写入Bitmap对象
     void write_bitmap_to_stream(std::ofstream& fout, const Bitmap* bmp) {
@@ -872,7 +1078,7 @@ public:
         }
 
         std::string filename =
-            base_filename +".part" + std::to_string(this->partition_id) + ".prep";
+            base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
         std::ofstream fout(filename, std::ios::binary | std::ios::trunc);
 
         if (!fout.is_open()) {
@@ -936,7 +1142,7 @@ public:
                       << std::flush;
         }
         write_data_to_stream(fout, this->local_partition_offset, this->sockets + 1);
-        
+
         write_data_to_stream(fout, &this->outgoing_adj_list_global_max, 1);
         write_data_to_stream(fout, &this->incoming_adj_list_global_max, 1);
         write_data_to_stream(fout, &this->compressed_outgoing_adj_index_global_max, 1);
@@ -1055,7 +1261,7 @@ public:
             }
             write_data_to_stream(fout,
                                  this->compressed_outgoing_adj_index[s_i],
-                                 compressed_outgoing_adj_index_global_max+1);
+                                 compressed_outgoing_adj_index_global_max + 1);
         }
 
         // 4. 保存每个NUMA socket的邻接表相关数据 (incoming)
@@ -1136,7 +1342,7 @@ public:
             }
             write_data_to_stream(fout,
                                  this->compressed_incoming_adj_index[s_i],
-                                 compressed_incoming_adj_index_global_max+1);
+                                 compressed_incoming_adj_index_global_max + 1);
         }
 
         fout.close();
@@ -1308,11 +1514,13 @@ public:
 
     //     for (int s_i = 0; s_i < this->sockets; ++s_i) {
     //         read_data_from_buffer(ptr, &this->outgoing_edges[s_i], 1);
-    //         read_data_from_buffer(ptr, this->outgoing_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
-    //         read_data_from_buffer(ptr, this->outgoing_adj_index[s_i], this->vertices + 1);
-    //         read_data_from_buffer(ptr, this->outgoing_adj_list[s_i], outgoing_adj_list_global_max * unit_size);
+    //         read_data_from_buffer(ptr, this->outgoing_adj_bitmap[s_i]->data,
+    //         (WORD_OFFSET(vertices) + 1)); read_data_from_buffer(ptr,
+    //         this->outgoing_adj_index[s_i], this->vertices + 1); read_data_from_buffer(ptr,
+    //         this->outgoing_adj_list[s_i], outgoing_adj_list_global_max * unit_size);
     //         read_data_from_buffer(ptr, &this->compressed_outgoing_adj_vertices[s_i], 1);
-    //         read_data_from_buffer(ptr, this->compressed_outgoing_adj_index[s_i], compressed_outgoing_adj_index_global_max + 1);
+    //         read_data_from_buffer(ptr, this->compressed_outgoing_adj_index[s_i],
+    //         compressed_outgoing_adj_index_global_max + 1);
     //     }
     //     // if (partition_id==0) {
     //     //     std::cout << "3. read outgoing adj done" << std::endl;
@@ -1367,11 +1575,13 @@ public:
     //     MPI_Barrier(MPI_COMM_WORLD);
     //     for (int s_i = 0; s_i < this->sockets; ++s_i) {
     //         read_data_from_buffer(ptr, &this->incoming_edges[s_i], 1);
-    //         read_data_from_buffer(ptr, this->incoming_adj_bitmap[s_i]->data, (WORD_OFFSET(vertices) + 1));
-    //         read_data_from_buffer(ptr, this->incoming_adj_index[s_i], this->vertices + 1);
-    //         read_data_from_buffer(ptr, this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
+    //         read_data_from_buffer(ptr, this->incoming_adj_bitmap[s_i]->data,
+    //         (WORD_OFFSET(vertices) + 1)); read_data_from_buffer(ptr,
+    //         this->incoming_adj_index[s_i], this->vertices + 1); read_data_from_buffer(ptr,
+    //         this->incoming_adj_list[s_i], incoming_adj_list_global_max * unit_size);
     //         read_data_from_buffer(ptr, &this->compressed_incoming_adj_vertices[s_i], 1);
-    //         read_data_from_buffer(ptr, this->compressed_incoming_adj_index[s_i], compressed_incoming_adj_index_global_max + 1);
+    //         read_data_from_buffer(ptr, this->compressed_incoming_adj_index[s_i],
+    //         compressed_incoming_adj_index_global_max + 1);
     //     }
     //     // 8. 检查是否读取完整个文件
     //     if (ptr > file_data + file_size) {
@@ -1398,8 +1608,7 @@ public:
     //      return true;
     // }
     bool load_preprocessed_graph(const std::string& base_filename) {
-        if (this->partition_id == -1) 
-            return false;
+        if (this->partition_id == -1) return false;
 
         std::string filename =
             base_filename + ".part" + std::to_string(this->partition_id) + ".prep";
@@ -1427,11 +1636,11 @@ public:
         read_data_from_stream(fin, this->partition_offset, this->partitions + 1);
         this->local_partition_offset = new VertexId[this->sockets + 1];
         read_data_from_stream(fin, this->local_partition_offset, this->sockets + 1);
-        
-        read_data_from_stream(fin,&this->outgoing_adj_list_global_max,1);
-        read_data_from_stream(fin,&this->incoming_adj_list_global_max,1);
-        read_data_from_stream(fin,&this->compressed_outgoing_adj_index_global_max,1);
-        read_data_from_stream(fin,&this->compressed_incoming_adj_index_global_max,1);
+
+        read_data_from_stream(fin, &this->outgoing_adj_list_global_max, 1);
+        read_data_from_stream(fin, &this->incoming_adj_list_global_max, 1);
+        read_data_from_stream(fin, &this->compressed_outgoing_adj_index_global_max, 1);
+        read_data_from_stream(fin, &this->compressed_incoming_adj_index_global_max, 1);
 
         // if (partition_id==0) {
         //     std::cout << "1. read metadata done" << std::endl;
@@ -1535,7 +1744,7 @@ public:
             read_data_from_stream(fin, &this->compressed_outgoing_adj_vertices[s_i], 1);
             read_data_from_stream(fin,
                                   this->compressed_outgoing_adj_index[s_i],
-                                  compressed_outgoing_adj_index_global_max+1);
+                                  compressed_outgoing_adj_index_global_max + 1);
         }
         // if (partition_id==0) {
         //     std::cout << "3. read outgoing adj done" << std::endl;
@@ -1560,7 +1769,7 @@ public:
             gim_incoming_adj_index[p_i] = new EdgeId*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
                 // gim_incoming_adj_index[p_i][s_i] =
-                    // (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+                // (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
                 gim_incoming_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
                     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
             }
@@ -1600,7 +1809,7 @@ public:
             read_data_from_stream(fin, &this->compressed_incoming_adj_vertices[s_i], 1);
             read_data_from_stream(fin,
                                   this->gim_compressed_incoming_adj_index[partition_id][s_i],
-                                  compressed_incoming_adj_index_global_max+1);
+                                  compressed_incoming_adj_index_global_max + 1);
         }
         compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
         for (size_t s_i = 0; s_i < sockets; s_i++) {
@@ -2834,7 +3043,7 @@ public:
         if (partition_id == 0) {
             // dump_memory_maps();
         }
-        
+
         R reducer = 0;
         size_t basic_chunk = 64;   // 每次处理的顶点数，和WORD的位数是对应的
         for (int t_i = 0; t_i < threads; t_i++) {
@@ -3214,6 +3423,10 @@ public:
         // 初始化完成后再进行操作
         // MPI_Barrier(MPI_COMM_WORLD);
         // #endif
+        double total_sparse_slot_outgoing_adj_list_access_time = 0;
+        unsigned long long total_sparse_slot_outgoing_adj_list_bytes = 0;
+        double total_dense_signal_incoming_adj_list_access_time = 0;
+        unsigned long long total_dense_signal_incoming_adj_list_bytes = 0;
         if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
             if (partition_id == 0) {
@@ -3674,9 +3887,17 @@ public:
                         }
                         thread_state[t_i]->status = WORKING;
                     }
-#pragma omp parallel reduction(+ : reducer)
+#ifdef STATISTICS_BANDWIDTH
+#    pragma omp parallel reduction(+ : reducer,                                         \
+                                       total_sparse_slot_outgoing_adj_list_access_time, \
+                                       total_sparse_slot_outgoing_adj_list_bytes)
+#else
+#    pragma omp parallel reduction(+ : reducer)
+#endif
                     {
                         R local_reducer = 0;
+                        double local_lambda_time = 0;
+                        unsigned long long local_lambda_bytes = 0;
                         int thread_id = omp_get_thread_num();
                         int s_i = get_socket_id(thread_id);
                         // 执行sparse_slot
@@ -3696,6 +3917,9 @@ public:
                                 M msg_data = buffer[b_i].msg_data;
                                 if (outgoing_adj_bitmap[s_i]->get_bit(
                                         v_i)) {   // 如果v_i在s_i socket内有出边
+#ifdef STATISTICS_BANDWIDTH
+                                    double lambda_start_time = get_time();
+#endif
                                     local_reducer += sparse_slot(
                                         v_i,
                                         msg_data,
@@ -3707,6 +3931,13 @@ public:
                                             outgoing_adj_list[s_i] +
                                                 outgoing_adj_index[s_i][v_i + 1]),
                                         -1);   // s_i内v_i的出边结束
+#ifdef STATISTICS_BANDWIDTH
+                                    double lambda_end_time = get_time();
+                                    local_lambda_time += (lambda_end_time - lambda_start_time);
+                                    local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
+                                                           outgoing_adj_index[s_i][v_i]) *
+                                                          sizeof(AdjUnit<EdgeData>);
+#endif
                                 }
                             }
                         }
@@ -3729,6 +3960,9 @@ public:
                                     VertexId v_i = buffer[b_i].vertex;
                                     M msg_data = buffer[b_i].msg_data;
                                     if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
+#ifdef STATISTICS_BANDWIDTH
+                                        double lambda_start_time = get_time();
+#endif
                                         local_reducer += sparse_slot(
                                             v_i,
                                             msg_data,
@@ -3739,11 +3973,22 @@ public:
                                                 outgoing_adj_list[s_i] +
                                                     outgoing_adj_index[s_i][v_i + 1]),
                                             -1);
+#ifdef STATISTICS_BANDWIDTH
+                                        double lambda_end_time = get_time();
+                                        local_lambda_time += (lambda_end_time - lambda_start_time);
+                                        local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
+                                                               outgoing_adj_index[s_i][v_i]) *
+                                                              sizeof(AdjUnit<EdgeData>);
+#endif
                                     }
                                 }
                             }
                         }
                         reducer += local_reducer;
+#ifdef STATISTICS_BANDWIDTH
+                        total_sparse_slot_outgoing_adj_list_access_time += local_lambda_time;
+                        total_sparse_slot_outgoing_adj_list_bytes += local_lambda_bytes;
+#endif
                     }
                     while (stealingss[partition_id] != 0) {
                         // printf("stealings:%d\n", stealingss[partition_id]);
@@ -3886,6 +4131,14 @@ public:
 #ifndef SPARSE_MODE_UNIDIRECTIONAL
             send_thread.join();
             recv_thread.join();
+#endif
+#ifdef STATISTICS_BANDWIDTH
+            printf("SPARE partition %d , Time = %f s, Total Bytes = %llu, Bandwidth = %f GB/s\n",
+                   partition_id,
+                   total_sparse_slot_outgoing_adj_list_access_time,
+                   total_sparse_slot_outgoing_adj_list_bytes,
+                   (double)total_sparse_slot_outgoing_adj_list_bytes /
+                       total_sparse_slot_outgoing_adj_list_access_time / (1024 * 1024 * 1024));
 #endif
             // 发送线程和计算均结束的时候
             process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
@@ -4168,9 +4421,16 @@ public:
                 for (int t_i = 0; t_i < threads; t_i++) {
                     *thread_state[t_i] = tuned_chunks_dense[i][t_i];
                 }
-                // 每个点对邻居执行dense_signal
-#pragma omp parallel
+// 每个点对邻居执行dense_signal
+#ifdef STATISTICS_BANDWIDTH
+#    pragma omp parallel reduction(+ : total_dense_signal_incoming_adj_list_access_time, \
+                                       total_dense_signal_incoming_adj_list_bytes)
+#else
+#    pragma omp parallel
+#endif
                 {
+                    double local_lambda_time = 0;
+                    unsigned long long local_lambda_bytes = 0;
                     int thread_id = omp_get_thread_num();
                     int s_i = get_socket_id(thread_id);
                     VertexId final_p_v_i = thread_state[thread_id]->end;
@@ -4187,6 +4447,9 @@ public:
                             VertexId v_i =
                                 compressed_incoming_adj_index[s_i][p_v_i]
                                     .vertex;   // 对于s_i socket中的v_i，对所有邻居执行dense_signal
+#ifdef STATISTICS_BANDWIDTH
+                            double lambda_start_time = get_time();
+#endif
                             dense_signal(
                                 v_i,
                                 VertexAdjList<EdgeData>(
@@ -4195,6 +4458,14 @@ public:
                                     incoming_adj_list[s_i] +
                                         compressed_incoming_adj_index[s_i][p_v_i + 1].index),
                                 -1);
+#ifdef STATISTICS_BANDWIDTH
+                            double lambda_end_time = get_time();
+                            local_lambda_time += (lambda_end_time - lambda_start_time);
+                            local_lambda_bytes +=
+                                (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                 compressed_incoming_adj_index[s_i][p_v_i].index) *
+                                sizeof(AdjUnit<EdgeData>);
+#endif
                         }
                     }
                     // 线程窃取
@@ -4213,6 +4484,9 @@ public:
                             }
                             for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
                                 VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
+#ifdef STATISTICS_BANDWIDTH
+                                double lambda_start_time = get_time();
+#endif
                                 dense_signal(
                                     v_i,
                                     VertexAdjList<EdgeData>(
@@ -4224,9 +4498,20 @@ public:
                                                                                1]   // s_i出边结束
                                                 .index),
                                     -1);
+#ifdef STATISTICS_BANDWIDTH
+                                double lambda_end_time = get_time();
+                                local_lambda_bytes +=
+                                    (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                     compressed_incoming_adj_index[s_i][p_v_i].index) *
+                                    sizeof(AdjUnit<EdgeData>);
+#endif
                             }
                         }
                     }
+#ifdef STATISTICS_BANDWIDTH
+                    total_dense_signal_incoming_adj_list_access_time += local_lambda_time;
+                    total_dense_signal_incoming_adj_list_bytes += local_lambda_bytes;
+#endif
                 }
 
                 // 全部执行完后再flush
@@ -4257,10 +4542,10 @@ public:
                     send_queue_mutex.unlock();
                 }
             }
-            if (finished[partition_id][0] != partitions * THREDAS) {
+            if (finished[partition_id][0] != partitions * THREADS) {
                 printf("finished:%d\n", finished[partition_id][0]);
             }
-            finished[partition_id][0] = partitions * THREDAS;
+            finished[partition_id][0] = partitions * THREADS;
             // 全局工作窃取
 #ifdef GLOBAL_STEALING_DENSE
             bool stealing_flag = true;
@@ -4497,10 +4782,22 @@ public:
             printf("process_edges took %lf (s)\n", stream_time);
         }
 #endif
+        // if(is_first){
+        //     analyze_degree_distribution(DETAILED);
+        // }
         if (is_first && partition_id == 0) {
             // printf_data_info();
             is_first = false;
         }
+#ifdef STATISTICS_BANDWIDTH
+        printf("DENSE  partition %d , Time = %lf (s), Total Bytes = %llu, Bandwidth = %lf
+                   GB /
+                   s\n ", partition_id,
+                   total_dense_signal_incoming_adj_list_access_time,
+               total_dense_signal_incoming_adj_list_bytes,
+               (double)total_dense_signal_incoming_adj_list_bytes /
+                   total_dense_signal_incoming_adj_list_access_time / (1024 * 1024 * 1024));
+#endif
         return global_reducer;
     }
 };
