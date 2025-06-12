@@ -70,9 +70,9 @@ void compute(Graph<Empty>* graph, VertexId root) {
             printf("active(%d)>=%u\n", i_i, active_vertices);
             // graph->print_process_data();
         }
-        // printf("partition_id:%d, sequence:\n",graph->partition_id);
-        // graph->print_get_sequence();
-        #endif
+// printf("partition_id:%d, sequence:\n",graph->partition_id);
+// graph->print_get_sequence();
+#endif
         VertexSubset** global_active_out = graph->alloc_global_vertex_subset();
         MPI_Barrier(MPI_COMM_WORLD);
         // VertexSubset* active_out = graph->alloc_vertex_subset();
@@ -80,6 +80,76 @@ void compute(Graph<Empty>* graph, VertexId root) {
         active_out->clear();
         graph->process_edges<VertexId, double>(
             [&](VertexId src) { graph->emit(src, num_paths[src]); },
+#ifdef COMPRESS
+            [&](VertexId src, double msg, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            if (!visited->get_bit(dst)) {
+                                if (num_paths[dst] == 0) {
+                                    active_out->set_bit(dst);
+                                }
+                                write_add(&num_paths[dst], msg);
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                } else {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            if (!global_visited[partition_id]->get_bit(dst)) {
+                                if (global_num_paths[partition_id][dst] == 0) {
+                                    global_active_out[partition_id]->set_bit(dst);
+                                }
+                                write_add(&global_num_paths[partition_id][dst], msg);
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                }
+            },
+            [&](VertexId dst, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    if (visited->get_bit(dst)) return;
+                    double sum = 0;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            if (active_in->get_bit(src)) {
+                                sum += num_paths[src];
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    if (sum > 0) {
+                        graph->emit(dst, sum);
+                    }
+                } else {
+                    if (global_visited[partition_id]->get_bit(dst)) return;
+                    double sum = 0;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            if (global_active_in[partition_id]->get_bit(src)) {
+                                sum += global_num_paths[partition_id][src];
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    if (sum > 0) {
+                        graph->emit_other(dst, sum, partition_id);
+                    }
+                }
+            },
+#else
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
@@ -108,12 +178,12 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if(partition_id==-1){
+                if (partition_id == -1) {
                     if (visited->get_bit(dst)) return;
                     double sum = 0;
-#ifdef OMP_SIMD
-#    pragma omp simd reduction(+ : sum)
-#endif
+#    ifdef OMP_SIMD
+#        pragma omp simd reduction(+ : sum)
+#    endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
@@ -124,12 +194,12 @@ void compute(Graph<Empty>* graph, VertexId root) {
                     if (sum > 0) {
                         graph->emit(dst, sum);
                     }
-                }else{
+                } else {
                     if (global_visited[partition_id]->get_bit(dst)) return;
                     double sum = 0;
-#ifdef OMP_SIMD
-#    pragma omp simd reduction(+ : sum)
-#endif
+#    ifdef OMP_SIMD
+#        pragma omp simd reduction(+ : sum)
+#    endif
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
@@ -138,10 +208,11 @@ void compute(Graph<Empty>* graph, VertexId root) {
                         }
                     }
                     if (sum > 0) {
-                        graph->emit_other(dst, sum,partition_id);
+                        graph->emit_other(dst, sum, partition_id);
                     }
                 }
             },
+#endif
             [&](VertexId dst, double msg) {
                 if (!visited->get_bit(dst)) {
                     active_out->set_bit(dst);
@@ -232,6 +303,66 @@ void compute(Graph<Empty>* graph, VertexId root) {
     while (levels.size() > 1) {
         graph->process_edges<VertexId, double>(
             [&](VertexId src) { graph->emit(src, dependencies[src]); },
+#ifdef COMPRESS
+            [&](VertexId src, double msg, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            if (!visited->get_bit(dst)) {
+                                write_add(&dependencies[dst], msg);
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                } else {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            if (!global_visited[partition_id]->get_bit(dst)) {
+                                write_add(&global_dependencies[partition_id][dst], msg);
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                }
+            },
+            [&](VertexId dst, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    if (visited->get_bit(dst)) return;
+                    double sum = 0;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            if (levels.back()->get_bit(src)) {
+                                sum += dependencies[src];
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    graph->emit(dst, sum);
+                } else {
+                    if (global_visited[partition_id]->get_bit(dst)) return;
+                    double sum = 0;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            if (global_levels.back()[partition_id]->get_bit(src)) {
+                                sum += global_dependencies[partition_id][src];
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    graph->emit_other(dst, sum, partition_id);
+                }
+            },
+            #else
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
@@ -252,7 +383,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 }
             },
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if(partition_id==-1){
+                if (partition_id == -1) {
                     if (visited->get_bit(dst)) return;
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
@@ -262,7 +393,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                         }
                     }
                     graph->emit(dst, sum);
-                }else{
+                } else {
                     if (global_visited[partition_id]->get_bit(dst)) return;
                     double sum = 0;
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
@@ -271,9 +402,10 @@ void compute(Graph<Empty>* graph, VertexId root) {
                             sum += global_dependencies[partition_id][src];
                         }
                     }
-                    graph->emit_other(dst, sum,partition_id);
+                    graph->emit_other(dst, sum, partition_id);
                 }
             },
+            #endif
             [&](VertexId dst, double msg) {
                 if (!visited->get_bit(dst)) {
                     write_add(&dependencies[dst], msg);
@@ -347,7 +479,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
             printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
         }
     }
-    #endif
+#endif
 
     graph->dealloc_vertex_array(dependencies);
     graph->dealloc_vertex_array(inv_num_paths);
@@ -356,200 +488,200 @@ void compute(Graph<Empty>* graph, VertexId root) {
 }
 
 // an implementation which uses an array to store the levels instead of multiple bitmaps
-void compute_compact(Graph<Empty>* graph, VertexId root) {
-    double exec_time = 0;
-    exec_time -= get_time();
+// void compute_compact(Graph<Empty>* graph, VertexId root) {
+//     double exec_time = 0;
+//     exec_time -= get_time();
 
-    double* num_paths = graph->alloc_vertex_array<double>();
-    double* dependencies = graph->alloc_vertex_array<double>();
-    VertexSubset* active_all = graph->alloc_vertex_subset();
-    active_all->fill();
-    VertexSubset* visited = graph->alloc_vertex_subset();
-    VertexId* level = graph->alloc_vertex_array<VertexId>();
-    VertexSubset* active_in = graph->alloc_vertex_subset();
-    VertexSubset* active_out = graph->alloc_vertex_subset();
+//     double* num_paths = graph->alloc_vertex_array<double>();
+//     double* dependencies = graph->alloc_vertex_array<double>();
+//     VertexSubset* active_all = graph->alloc_vertex_subset();
+//     active_all->fill();
+//     VertexSubset* visited = graph->alloc_vertex_subset();
+//     VertexId* level = graph->alloc_vertex_array<VertexId>();
+//     VertexSubset* active_in = graph->alloc_vertex_subset();
+//     VertexSubset* active_out = graph->alloc_vertex_subset();
 
-    visited->clear();
-    visited->set_bit(root);
-    active_in->clear();
-    active_in->set_bit(root);
-    VertexId active_vertices = graph->process_vertices<VertexId>(
-        [&](VertexId vtx) {
-            if (active_in->get_bit(vtx)) {
-                level[vtx] = 0;
-                return 1;
-            } else {
-                level[vtx] = graph->vertices;
-                return 0;
-            }
-        },
-        active_all);
-    graph->fill_vertex_array(num_paths, 0.0);
-    num_paths[root] = 1.0;
-    VertexId i_i;
-    if (graph->partition_id == 0) {
-        // printf("forward\n");
-    }
-    for (i_i = 0; active_vertices > 0; i_i++) {
-        // if (graph->partition_id==0) {
-        //   printf("active(%d)>=%u\n", i_i, active_vertices);
-        // }
-        active_out->clear();
-        graph->process_edges<VertexId, double>(
-            [&](VertexId src) { graph->emit(src, num_paths[src]); },
-            [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
-                for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    if (!visited->get_bit(dst)) {
-                        if (num_paths[dst] == 0) {
-                            active_out->set_bit(dst);
-                        }
-                        write_add(&num_paths[dst], msg);
-                    }
-                }
-                return 0;
-            },
-            [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if (visited->get_bit(dst)) return;
-                double sum = 0;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    if (active_in->get_bit(src)) {
-                        sum += num_paths[src];
-                    }
-                }
-                if (sum > 0) {
-                    graph->emit(dst, sum);
-                }
-            },
-            [&](VertexId dst, double msg) {
-                if (!visited->get_bit(dst)) {
-                    active_out->set_bit(dst);
-                    write_add(&num_paths[dst], msg);
-                }
-                return 0;
-            },
-            active_in,
-            visited);
-        active_vertices = graph->process_vertices<VertexId>(
-            [&](VertexId vtx) {
-                visited->set_bit(vtx);
-                level[vtx] = i_i + 1;
-                return 1;
-            },
-            active_out);
-        std::swap(active_in, active_out);
-    }
+//     visited->clear();
+//     visited->set_bit(root);
+//     active_in->clear();
+//     active_in->set_bit(root);
+//     VertexId active_vertices = graph->process_vertices<VertexId>(
+//         [&](VertexId vtx) {
+//             if (active_in->get_bit(vtx)) {
+//                 level[vtx] = 0;
+//                 return 1;
+//             } else {
+//                 level[vtx] = graph->vertices;
+//                 return 0;
+//             }
+//         },
+//         active_all);
+//     graph->fill_vertex_array(num_paths, 0.0);
+//     num_paths[root] = 1.0;
+//     VertexId i_i;
+//     if (graph->partition_id == 0) {
+//         // printf("forward\n");
+//     }
+//     for (i_i = 0; active_vertices > 0; i_i++) {
+//         // if (graph->partition_id==0) {
+//         //   printf("active(%d)>=%u\n", i_i, active_vertices);
+//         // }
+//         active_out->clear();
+//         graph->process_edges<VertexId, double>(
+//             [&](VertexId src) { graph->emit(src, num_paths[src]); },
+//             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+//                 for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+//                     VertexId dst = ptr->neighbour;
+//                     if (!visited->get_bit(dst)) {
+//                         if (num_paths[dst] == 0) {
+//                             active_out->set_bit(dst);
+//                         }
+//                         write_add(&num_paths[dst], msg);
+//                     }
+//                 }
+//                 return 0;
+//             },
+//             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+//                 if (visited->get_bit(dst)) return;
+//                 double sum = 0;
+//                 for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+//                     VertexId src = ptr->neighbour;
+//                     if (active_in->get_bit(src)) {
+//                         sum += num_paths[src];
+//                     }
+//                 }
+//                 if (sum > 0) {
+//                     graph->emit(dst, sum);
+//                 }
+//             },
+//             [&](VertexId dst, double msg) {
+//                 if (!visited->get_bit(dst)) {
+//                     active_out->set_bit(dst);
+//                     write_add(&num_paths[dst], msg);
+//                 }
+//                 return 0;
+//             },
+//             active_in,
+//             visited);
+//         active_vertices = graph->process_vertices<VertexId>(
+//             [&](VertexId vtx) {
+//                 visited->set_bit(vtx);
+//                 level[vtx] = i_i + 1;
+//                 return 1;
+//             },
+//             active_out);
+//         std::swap(active_in, active_out);
+//     }
 
-    double* inv_num_paths = num_paths;
-    graph->process_vertices<VertexId>(
-        [&](VertexId vtx) {
-            inv_num_paths[vtx] = 1 / num_paths[vtx];
-            dependencies[vtx] = 0;
-            return 1;
-        },
-        active_all);
-    visited->clear();
-    active_in->clear();
-    graph->process_vertices<VertexId>(
-        [&](VertexId vtx) {
-            if (level[vtx] == i_i) {
-                active_in->set_bit(vtx);
-                return 1;
-            }
-            return 0;
-        },
-        active_all);
-    graph->process_vertices<VertexId>(
-        [&](VertexId vtx) {
-            visited->set_bit(vtx);
-            dependencies[vtx] += inv_num_paths[vtx];
-            return 1;
-        },
-        active_in);
-    graph->transpose();
-    if (graph->partition_id == 0) {
-        // printf("backward\n");
-    }
-    while (i_i > 0) {
-        graph->process_edges<VertexId, double>(
-            [&](VertexId src) { graph->emit(src, dependencies[src]); },
-            [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
-                for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
-                    VertexId dst = ptr->neighbour;
-                    if (!visited->get_bit(dst)) {
-                        write_add(&dependencies[dst], msg);
-                    }
-                }
-                return 0;
-            },
-            [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
-                if (visited->get_bit(dst)) return;
-                double sum = 0;
-                for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
-                    VertexId src = ptr->neighbour;
-                    if (active_in->get_bit(src)) {
-                        sum += dependencies[src];
-                    }
-                }
-                graph->emit(dst, sum);
-            },
-            [&](VertexId dst, double msg) {
-                if (!visited->get_bit(dst)) {
-                    write_add(&dependencies[dst], msg);
-                }
-                return 0;
-            },
-            active_in,
-            visited);
-        i_i--;
-        active_in->clear();
-        active_vertices = graph->process_vertices<VertexId>(
-            [&](VertexId vtx) {
-                if (level[vtx] == i_i) {
-                    active_in->set_bit(vtx);
-                    return 1;
-                }
-                return 0;
-            },
-            active_all);
-        graph->process_vertices<VertexId>(
-            [&](VertexId vtx) {
-                visited->set_bit(vtx);
-                dependencies[vtx] += inv_num_paths[vtx];
-                return 1;
-            },
-            active_in);
-    }
+//     double* inv_num_paths = num_paths;
+//     graph->process_vertices<VertexId>(
+//         [&](VertexId vtx) {
+//             inv_num_paths[vtx] = 1 / num_paths[vtx];
+//             dependencies[vtx] = 0;
+//             return 1;
+//         },
+//         active_all);
+//     visited->clear();
+//     active_in->clear();
+//     graph->process_vertices<VertexId>(
+//         [&](VertexId vtx) {
+//             if (level[vtx] == i_i) {
+//                 active_in->set_bit(vtx);
+//                 return 1;
+//             }
+//             return 0;
+//         },
+//         active_all);
+//     graph->process_vertices<VertexId>(
+//         [&](VertexId vtx) {
+//             visited->set_bit(vtx);
+//             dependencies[vtx] += inv_num_paths[vtx];
+//             return 1;
+//         },
+//         active_in);
+//     graph->transpose();
+//     if (graph->partition_id == 0) {
+//         // printf("backward\n");
+//     }
+//     while (i_i > 0) {
+//         graph->process_edges<VertexId, double>(
+//             [&](VertexId src) { graph->emit(src, dependencies[src]); },
+//             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
+//                 for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
+//                     VertexId dst = ptr->neighbour;
+//                     if (!visited->get_bit(dst)) {
+//                         write_add(&dependencies[dst], msg);
+//                     }
+//                 }
+//                 return 0;
+//             },
+//             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
+//                 if (visited->get_bit(dst)) return;
+//                 double sum = 0;
+//                 for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
+//                     VertexId src = ptr->neighbour;
+//                     if (active_in->get_bit(src)) {
+//                         sum += dependencies[src];
+//                     }
+//                 }
+//                 graph->emit(dst, sum);
+//             },
+//             [&](VertexId dst, double msg) {
+//                 if (!visited->get_bit(dst)) {
+//                     write_add(&dependencies[dst], msg);
+//                 }
+//                 return 0;
+//             },
+//             active_in,
+//             visited);
+//         i_i--;
+//         active_in->clear();
+//         active_vertices = graph->process_vertices<VertexId>(
+//             [&](VertexId vtx) {
+//                 if (level[vtx] == i_i) {
+//                     active_in->set_bit(vtx);
+//                     return 1;
+//                 }
+//                 return 0;
+//             },
+//             active_all);
+//         graph->process_vertices<VertexId>(
+//             [&](VertexId vtx) {
+//                 visited->set_bit(vtx);
+//                 dependencies[vtx] += inv_num_paths[vtx];
+//                 return 1;
+//             },
+//             active_in);
+//     }
 
-    graph->process_vertices<VertexId>(
-        [&](VertexId vtx) {
-            dependencies[vtx] = (dependencies[vtx] - inv_num_paths[vtx]) / inv_num_paths[vtx];
-            return 1;
-        },
-        active_all);
-    graph->transpose();
+//     graph->process_vertices<VertexId>(
+//         [&](VertexId vtx) {
+//             dependencies[vtx] = (dependencies[vtx] - inv_num_paths[vtx]) / inv_num_paths[vtx];
+//             return 1;
+//         },
+//         active_all);
+//     graph->transpose();
 
-    exec_time += get_time();
-    // if (graph->partition_id==0) {
-    //   printf("exec_time=%lf(s)\n", exec_time);
-    // }
-    printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
-    graph->gather_vertex_array(dependencies, 0);
-    graph->gather_vertex_array(inv_num_paths, 0);
-    if (graph->partition_id == 0) {
-        // for (VertexId v_i=0;v_i<20;v_i++) {
-        //   printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
-        // }
-    }
+//     exec_time += get_time();
+//     // if (graph->partition_id==0) {
+//     //   printf("exec_time=%lf(s)\n", exec_time);
+//     // }
+//     printf("partition: %d,exec_time=%lf(s)\n", graph->get_partition_id(), exec_time);
+//     graph->gather_vertex_array(dependencies, 0);
+//     graph->gather_vertex_array(inv_num_paths, 0);
+//     if (graph->partition_id == 0) {
+//         // for (VertexId v_i=0;v_i<20;v_i++) {
+//         //   printf("%lf %lf\n", dependencies[v_i], 1 / inv_num_paths[v_i]);
+//         // }
+//     }
 
-    graph->dealloc_vertex_array(dependencies);
-    graph->dealloc_vertex_array(inv_num_paths);
-    delete visited;
-    delete active_all;
-    delete active_in;
-    delete active_out;
-}
+//     graph->dealloc_vertex_array(dependencies);
+//     graph->dealloc_vertex_array(inv_num_paths);
+//     delete visited;
+//     delete active_all;
+//     delete active_in;
+//     delete active_out;
+// }
 
 int main(int argc, char** argv) {
     MPI_Instance mpi(&argc, &argv);
@@ -581,7 +713,7 @@ int main(int argc, char** argv) {
         //     printf("Finished saving preprocessed graph data.\n");
         // }
     }
-    
+
     // graph->load_directed(argv[1], std::atoi(argv[2]));
 
 #if COMPACT
@@ -626,5 +758,6 @@ int main(int argc, char** argv) {
     }
 #endif
     delete graph;
+    _exit(0);
     return 0;
 }

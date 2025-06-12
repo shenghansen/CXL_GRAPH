@@ -44,6 +44,36 @@ void compute(Graph<Empty> * graph) {
     active_out->clear();
     active_vertices = graph->process_edges<VertexId, VertexId>(
         [&](VertexId src) { graph->emit(src, label[src]); },
+        #ifdef COMPRESS
+        [&](VertexId src, VertexId msg, uint8_t* compressed_list, int degree, int partition_id) {
+            decode<Empty>(
+                [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                    if (msg < label[dst]) {
+                        write_min(&label[dst], msg);
+                        active_out->set_bit(dst);
+                    }
+                    return true;
+                },
+                compressed_list,
+                src,
+                degree);
+            return 0;
+        },
+        [&](VertexId dst, uint8_t* compressed_list, int degree, int partition_id) {
+            VertexId msg = dst;
+            decode<Empty>(
+                [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                    if (label[src] < msg) {
+                        msg = label[src];
+                    }
+                    return true;
+                },
+                compressed_list,
+                dst,
+                degree);
+            if (msg < dst) graph->emit(dst, msg);
+        },
+        #else
         [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
             VertexId activated = 0;
             for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
@@ -68,6 +98,7 @@ void compute(Graph<Empty> * graph) {
                 graph->emit(dst, msg);
             }
         },
+        #endif
         [&](VertexId dst, VertexId msg) {
             if (msg < label[dst]) {
                 write_min(&label[dst], msg);

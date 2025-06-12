@@ -53,3 +53,4 @@ test.sh
 memcpy/
 
 .cursorignore
+origin_result.txt

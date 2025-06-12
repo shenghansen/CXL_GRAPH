@@ -17,10 +17,11 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "compress.hpp"
 #include "core/gim_graph.hpp"
 #include "mpi.h"
 
-typedef float Weight;
+typedef int Weight;
 double exec_time = 0;
 std::vector<double> times;
 void compute(Graph<Weight>* graph, VertexId root) {
@@ -55,6 +56,76 @@ void compute(Graph<Weight>* graph, VertexId root) {
         active_out->clear();
         active_vertices = graph->process_edges<VertexId, Weight>(
             [&](VertexId src) { graph->emit(src, distance[src]); },
+#ifdef COMPRESS
+            [&](VertexId src, Weight msg, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    VertexId activated = 0;
+                    decode<Weight>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            Weight relax_dist = msg + weight;
+                            if (relax_dist < distance[dst]) {
+                                if (write_min(&distance[dst], relax_dist)) {
+                                    active_out->set_bit(dst);
+                                    activated += 1;
+                                }
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return activated;
+                } else {
+                    VertexId activated = 0;
+                    decode<Weight>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            Weight relax_dist = msg + weight;
+                            if (relax_dist < global_distance[partition_id][dst]) {
+                                if (write_min(&global_distance[partition_id][dst], relax_dist)) {
+                                    global_active_out[partition_id]->set_bit(dst);
+                                    activated += 1;
+                                }
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return activated;
+                }
+            },
+            [&](VertexId dst, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    Weight msg = 1e9;
+                    decode<Weight>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            Weight relax_dist = distance[src] + weight;
+                            if (relax_dist < msg) {
+                                msg = relax_dist;
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    if (msg < 1e9) graph->emit(dst, msg);
+                } else {
+                    Weight msg = 1e9;
+                    decode<Weight>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            Weight relax_dist = global_distance[partition_id][src] + weight;
+                            if (relax_dist < msg) {
+                                msg = relax_dist;
+                            }
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    if (msg < 1e9) graph->emit_other(dst, msg, partition_id);
+                }
+            },
+#else
             [&](VertexId src, Weight msg, VertexAdjList<Weight> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     VertexId activated = 0;
@@ -91,9 +162,9 @@ void compute(Graph<Weight>* graph, VertexId root) {
             [&](VertexId dst, VertexAdjList<Weight> incoming_adj, int partition_id) {
                 if (partition_id == -1) {
                     Weight msg = 1e9;
-#ifdef OMP_SIMD
-#    pragma omp simd reduction(min : msg)
-#endif
+#    ifdef OMP_SIMD
+#        pragma omp simd reduction(min : msg)
+#    endif
                     for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
                          ptr++) {
                         VertexId src = ptr->neighbour;
@@ -106,9 +177,9 @@ void compute(Graph<Weight>* graph, VertexId root) {
                     if (msg < 1e9) graph->emit(dst, msg);
                 } else {
                     Weight msg = 1e9;
-#ifdef OMP_SIMD
-#    pragma omp simd reduction(min : msg)
-#endif
+#    ifdef OMP_SIMD
+#        pragma omp simd reduction(min : msg)
+#    endif
                     for (AdjUnit<Weight>* ptr = incoming_adj.begin; ptr != incoming_adj.end;
                          ptr++) {
                         VertexId src = ptr->neighbour;
@@ -121,6 +192,7 @@ void compute(Graph<Weight>* graph, VertexId root) {
                     if (msg < 1e9) graph->emit_other(dst, msg, partition_id);
                 }
             },
+#endif
             [&](VertexId dst, Weight msg) {
                 if (msg < distance[dst]) {
                     write_min(&distance[dst], msg);
@@ -229,5 +301,6 @@ int main(int argc, char** argv) {
 #endif
 
     delete graph;
+    _exit(0);
     return 0;
 }

@@ -17,8 +17,10 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "compress.hpp"
 #include "core/gim_graph.hpp"
 #include "mpi.h"
+#include "type.hpp"
 
 #include <math.h>
 
@@ -85,6 +87,56 @@ void compute(Graph<Empty>* graph, int iterations) {
         // 稀疏模式下sendbuffer放pr值，稠密模式下sendbuffer放sum
         graph->process_edges<int, double>(
             [&](VertexId src) { graph->emit(src, curr[src]); },
+#ifdef COMPRESS
+            [&](VertexId src, double msg, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            write_add(&next[dst], msg);
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                } else {
+                    decode<Empty>(
+                        [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                            write_add(&global_next[partition_id][dst], msg);
+                            return true;
+                        },
+                        compressed_list,
+                        src,
+                        degree);
+                    return 0;
+                }
+            },
+            [&](VertexId dst, uint8_t* compressed_list, int degree, int partition_id) {
+                if (partition_id == -1) {
+                    float sum = 0.0f;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            sum += curr[src];
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    graph->emit(dst, sum);
+                } else {
+                    float sum = 0.0f;
+                    decode<Empty>(
+                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                            sum += global_curr[partition_id][src];
+                            return true;
+                        },
+                        compressed_list,
+                        dst,
+                        degree);
+                    graph->emit_other(dst, sum, partition_id);
+                }
+            },
+#else
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
@@ -105,42 +157,43 @@ void compute(Graph<Empty>* graph, int iterations) {
             [&](VertexId dst, VertexAdjList<Empty> incoming_adj, int partition_id) {
                 if (partition_id == -1) {
                     float sum = 0.0f;
-#ifdef OMP_SIMD
+#    ifdef OMP_SIMD
                     AdjUnit<Empty>* begin_ptr = incoming_adj.begin;
                     size_t size = incoming_adj.end - incoming_adj.begin;
-#    pragma omp simd reduction(+ : sum)
+#        pragma omp simd reduction(+ : sum)
                     for (size_t i = 0; i < size; i++) {
                         VertexId src = begin_ptr[i].neighbour;
                         sum += curr[src];
                     }
-#else
+#    else
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
                         sum += curr[src];
                     }
-#endif
+#    endif
                     graph->emit(dst, sum);
                 } else {
                     float sum = 0.0f;
-#ifdef OMP_SIMD
+#    ifdef OMP_SIMD
                     AdjUnit<Empty>* begin_ptr = incoming_adj.begin;
                     size_t size = incoming_adj.end - incoming_adj.begin;
-#    pragma omp simd reduction(+ : sum)
+#        pragma omp simd reduction(+ : sum)
                     for (size_t i = 0; i < size; i++) {
                         VertexId src = begin_ptr[i].neighbour;
                         sum += global_curr[partition_id][src];
                     }
-#else
+#    else
                     for (AdjUnit<Empty>* ptr = incoming_adj.begin; ptr != incoming_adj.end; ptr++) {
                         VertexId src = ptr->neighbour;
                         CXL_PREFETCH
                         sum += global_curr[partition_id][src];
                     }
-#endif
+#    endif
                     graph->emit_other(dst, sum, partition_id);
                 }
             },
+#endif
             [&](VertexId dst, double msg) {
                 write_add(&next[dst], msg);
                 return 0;
@@ -323,5 +376,6 @@ int main(int argc, char** argv) {
     }
 #endif
     delete graph;
+    _exit(0);
     return 0;
 }

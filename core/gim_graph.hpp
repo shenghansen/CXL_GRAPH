@@ -16,6 +16,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 
 #ifndef GRAPH_HPP
 #define GRAPH_HPP
+
 #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
 #    define UNIDIRECTIONAL_MODE
 #endif
@@ -38,6 +39,7 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #endif
 
 
+#include <cstdint>
 #include <errno.h>
 #include <fcntl.h>
 #include <immintrin.h>
@@ -69,9 +71,11 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #include <vector>
 
 #include "bitmap.hpp"
-#include "communicate.h"
+// #include "communicate.h"
+#include "CXL_SHM.h"
 #include "core/atomic.hpp"
 #include "core/bitmap.hpp"
+#include "core/compress.hpp"
 #include "core/constants.hpp"
 #include "core/filesystem.hpp"
 #include "core/mpi.hpp"
@@ -269,7 +273,7 @@ public:
 
     // GIM
     CXL_SHM* cxl_shm;
-    GIM_comm* gim_comm;
+    // GIM_comm* gim_comm;
     /* buffer */
     GIMMessageBuffer****
         gim_send_buffer;   // MessageBuffer* [partitions][partitions] [sockets]; numa-aware
@@ -319,6 +323,12 @@ public:
     size_t incoming_adj_list_global_max;
     size_t compressed_outgoing_adj_index_global_max;
     size_t compressed_incoming_adj_index_global_max;
+
+    /* for compress */
+    uint8_t** compressed_outgoing_adj_list;
+    uint8_t** compressed_incoming_adj_list;
+    uint8_t*** gim_compressed_outgoing_adj_list;
+    uint8_t*** gim_compressed_incoming_adj_list;
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -644,7 +654,7 @@ public:
         MPI_Comm_size(MPI_COMM_WORLD, &partitions);
 
         cxl_shm = new CXL_SHM(partitions, partition_id);
-        gim_comm = new GIM_comm(cxl_shm);
+        // gim_comm = new GIM_comm(cxl_shm);
 
         edge_data_size = std::is_same<EdgeData, Empty>::value ? 0 : sizeof(EdgeData);
         unit_size = sizeof(VertexId) + edge_data_size;
@@ -812,6 +822,51 @@ public:
 #endif
                 }
             }
+        }
+        /* compressed list init */
+        gim_compressed_outgoing_adj_list = new uint8_t**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_outgoing_adj_list[p_i] = new uint8_t*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_outgoing_adj_list[p_i][s_i] = (uint8_t*)cxl_shm->CXL_SHM_malloc(
+                    outgoing_adj_list_global_max * sizeof(uint8_t));
+            }
+        }
+        gim_compressed_incoming_adj_list = new uint8_t**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_incoming_adj_list[p_i] = new uint8_t*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_incoming_adj_list[p_i][s_i] = (uint8_t*)cxl_shm->CXL_SHM_malloc(
+                    incoming_adj_list_global_max * sizeof(uint8_t));
+            }
+        }
+        compressed_outgoing_adj_list = gim_compressed_outgoing_adj_list[partition_id];
+        compressed_incoming_adj_list = gim_compressed_incoming_adj_list[partition_id];
+        /* compress */
+        sort_adj_list(outgoing_adj_list, outgoing_adj_index, sockets, vertices);
+        sort_adj_list(incoming_adj_list,
+                      compressed_incoming_adj_index,
+                      compressed_incoming_adj_vertices,
+                      sockets);
+        size_t* return_space = new size_t[sockets];
+        uint8_t** compressed_outgoing_ptr = parallel_compress_edges(
+            outgoing_adj_list, outgoing_adj_index, vertices, outgoing_edges, sockets, return_space);
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            memcpy(compressed_outgoing_adj_list[s_i],
+                   compressed_outgoing_ptr[s_i],
+                   return_space[s_i] * sizeof(uint8_t));
+        }
+        uint8_t** compressed_incoming_ptr =
+            parallel_compress_edges(incoming_adj_list,
+                                    compressed_incoming_adj_index,
+                                    compressed_incoming_adj_vertices,
+                                    incoming_edges,
+                                    sockets,
+                                    return_space);
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            memcpy(compressed_incoming_adj_list[s_i],
+                   compressed_incoming_ptr[s_i],
+                   return_space[s_i] * sizeof(uint8_t));
         }
     }
 
@@ -1017,6 +1072,8 @@ public:
         std::swap(gim_outgoing_adj_bitmap, gim_incoming_adj_bitmap);
         std::swap(gim_outgoing_adj_list, gim_incoming_adj_list);
         std::swap(gim_compressed_outgoing_adj_index, gim_compressed_incoming_adj_index);
+        std::swap(gim_compressed_outgoing_adj_list, gim_compressed_incoming_adj_list);
+        std::swap(compressed_outgoing_adj_list, compressed_incoming_adj_list);
     }
 
     // 持久化数据辅助函数
@@ -3292,435 +3349,437 @@ public:
 
     // process edges
     template<typename R, typename M>
-    R process_edges(
-        std::function<void(VertexId)> sparse_signal,
-        std::function<R(VertexId, M, VertexAdjList<EdgeData>, int partiton_id)> sparse_slot,
-        std::function<void(VertexId, VertexAdjList<EdgeData>, int partiton_id)> dense_signal,
-        std::function<R(VertexId, M)> dense_slot, Bitmap* active,
-        Bitmap* dense_selective = nullptr) {
+#ifdef COMPRESS
+    R process_edges(std::function<void(VertexId)> sparse_signal,
+                    std::function<R(VertexId, M, uint8_t*, int, int)> sparse_slot,
+                    std::function<void(VertexId, uint8_t*, int, int)> dense_signal,
+                    std::function<R(VertexId, M)> dense_slot, Bitmap* active,
+                    Bitmap* dense_selective = nullptr){
+#else
+    R process_edges(std::function<void(VertexId)> sparse_signal,
+                    std::function<R(VertexId, M, VertexAdjList<EdgeData>, int)> sparse_slot,
+                    std::function<void(VertexId, VertexAdjList<EdgeData>, int)> dense_signal,
+                    std::function<R(VertexId, M)> dense_slot, Bitmap* active,
+                    Bitmap* dense_selective = nullptr) {
+#endif
         double stream_time = 0;
 
-        stream_time -= MPI_Wtime();
-        for (int i = 0; i < 4; i++) {
-            process_edge_time[i] = 0;
-        }
-        size_t local_send_buffer_size = 0;
-        for (int t_i = 0; t_i < threads; t_i++) {   // 调整local_send_buffer的大小
-            local_send_buffer[t_i]->resize(sizeof(MsgUnit<M>) * local_send_buffer_limit);
-            local_send_buffer_size += sizeof(MsgUnit<M>) * local_send_buffer_limit;
-            local_send_buffer[t_i]->count = 0;
-        }
+    stream_time -= MPI_Wtime();
+    for (int i = 0; i < 4; i++) {
+        process_edge_time[i] = 0;
+    }
+    size_t local_send_buffer_size = 0;
+    for (int t_i = 0; t_i < threads; t_i++) {   // 调整local_send_buffer的大小
+        local_send_buffer[t_i]->resize(sizeof(MsgUnit<M>) * local_send_buffer_limit);
+        local_send_buffer_size += sizeof(MsgUnit<M>) * local_send_buffer_limit;
+        local_send_buffer[t_i]->count = 0;
+    }
 
-        R reducer = 0;
-        EdgeId active_edges = process_vertices<EdgeId>(   // 计算active中的点的出度之和
-            [&](VertexId vtx) { return (EdgeId)out_degree[vtx]; },
-            active);
-        bool sparse = (active_edges < edges / 20);
+    R reducer = 0;
+    EdgeId active_edges = process_vertices<EdgeId>(   // 计算active中的点的出度之和
+        [&](VertexId vtx) { return (EdgeId)out_degree[vtx]; }, active);
+    bool sparse = (active_edges < edges / 20);
 
-        // if (partition_id == 0) printf("spare:%d\n", sparse);
-        size_t send_buffer_size = 0;
-        size_t recv_buffer_size = 0;
-        finished[partition_id][0] = 0;
-        if (sparse) {
-            for (int i = 0; i < partitions; i++) {   // 稀疏模式每个host要向外发送数据
-                for (int s_i = 0; s_i < sockets; s_i++) {
+    // if (partition_id == 0) printf("spare:%d\n", sparse);
+    size_t send_buffer_size = 0;
+    size_t recv_buffer_size = 0;
+    finished[partition_id][0] = 0;
+    if (sparse) {
+        for (int i = 0; i < partitions; i++) {   // 稀疏模式每个host要向外发送数据
+            for (int s_i = 0; s_i < sockets; s_i++) {
 
-                    recv_buffer[i][s_i]->resize(
-                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
-                    send_buffer[partition_id][s_i]->resize(
-                        sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
-                    send_buffer[partition_id][s_i]->count = 0;
-                    recv_buffer[i][s_i]->count = 0;
+                recv_buffer[i][s_i]->resize(
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                send_buffer[partition_id][s_i]->resize(
+                    sizeof(MsgUnit<M>) * owned_vertices *
+                    sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                send_buffer[partition_id][s_i]->count = 0;
+                recv_buffer[i][s_i]->count = 0;
 
-                    gim_recv_buffer[partition_id][i][s_i]->resize(
-                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
-                    gim_send_buffer[partition_id][partition_id][s_i]->resize(
-                        sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
-                    send_count[partition_id][i][s_i] = 0;
-                    gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
-                    gim_recv_buffer[partition_id][i][s_i]->count = 0;
+                gim_recv_buffer[partition_id][i][s_i]->resize(
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                gim_send_buffer[partition_id][partition_id][s_i]->resize(
+                    sizeof(MsgUnit<M>) * owned_vertices *
+                    sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                send_count[partition_id][i][s_i] = 0;
+                gim_send_buffer[partition_id][partition_id][s_i]->count = 0;
+                gim_recv_buffer[partition_id][i][s_i]->count = 0;
 
-                    send_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
-                    recv_buffer_size += sizeof(MsgUnit<M>) *
-                                        (partition_offset[i + 1] - partition_offset[i]) * sockets;
+                send_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
+                recv_buffer_size +=
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) * sockets;
 #ifdef UNIDIRECTIONAL_MODE
-                    // placement new
-                    // 需要显式调用析构函数，它直接构造对象，不进行内存分配，但是没有用new管理导致不会被析构，用delete导致未定义行为
-                    new (completion_tags[partition_id][i][s_i]) std::atomic<bool>(false);
-                    length_array[partition_id][i][s_i] = 0;
-#endif
-                }
-#ifdef UNIDIRECTIONAL_MODE
-                new (&available[partition_id][i]) std::atomic<bool>(false);
+                // placement new
+                // 需要显式调用析构函数，它直接构造对象，不进行内存分配，但是没有用new管理导致不会被析构，用delete导致未定义行为
+                new (completion_tags[partition_id][i][s_i]) std::atomic<bool>(false);
+                length_array[partition_id][i][s_i] = 0;
 #endif
             }
-        } else {
-            for (int i = 0; i < partitions; i++) {   // 稠密模式每个host要接受数据
-                for (int s_i = 0; s_i < sockets; s_i++) {
-
-
-                    recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
-                                                sockets);   // 跟上面相反
-                    send_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) *
-                                                (partition_offset[i + 1] - partition_offset[i]) *
-                                                sockets);
-                    send_buffer[i][s_i]->count = 0;
-                    recv_buffer[i][s_i]->count = 0;
-
-                    gim_recv_buffer[partition_id][i][s_i]->resize(
-                        sizeof(MsgUnit<M>) * owned_vertices *
-                        sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
-                    gim_send_buffer[partition_id][partition_id][s_i]->resize(
-                        sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
-                        sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
-                    send_count[partition_id][i][s_i] = 0;
-                    gim_send_buffer[partition_id][i][s_i]->count = 0;
-                    gim_recv_buffer[partition_id][i][s_i]->count = 0;
-                    recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
-                    send_buffer_size += sizeof(MsgUnit<M>) *
-                                        (partition_offset[i + 1] - partition_offset[i]) * sockets;
 #ifdef UNIDIRECTIONAL_MODE
-                    new (completion_tags[partition_id][i][s_i]) std::atomic<bool>(false);
-                    length_array[partition_id][i][s_i] = 0;
+            new (&available[partition_id][i]) std::atomic<bool>(false);
 #endif
-                }
+        }
+    } else {
+        for (int i = 0; i < partitions; i++) {   // 稠密模式每个host要接受数据
+            for (int s_i = 0; s_i < sockets; s_i++) {
+
+
+                recv_buffer[i][s_i]->resize(sizeof(MsgUnit<M>) * owned_vertices *
+                                            sockets);   // 跟上面相反
+                send_buffer[i][s_i]->resize(
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) * sockets);
+                send_buffer[i][s_i]->count = 0;
+                recv_buffer[i][s_i]->count = 0;
+
+                gim_recv_buffer[partition_id][i][s_i]->resize(
+                    sizeof(MsgUnit<M>) * owned_vertices *
+                    sockets);   // 接受区间是msgu的大小乘socket数乘第i个host拥有点数
+                gim_send_buffer[partition_id][partition_id][s_i]->resize(
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) *
+                    sockets);   // 发送区间都一样，msgu的大小乘socket数*自己拥有的点
+                send_count[partition_id][i][s_i] = 0;
+                gim_send_buffer[partition_id][i][s_i]->count = 0;
+                gim_recv_buffer[partition_id][i][s_i]->count = 0;
+                recv_buffer_size += sizeof(MsgUnit<M>) * owned_vertices * sockets;
+                send_buffer_size +=
+                    sizeof(MsgUnit<M>) * (partition_offset[i + 1] - partition_offset[i]) * sockets;
 #ifdef UNIDIRECTIONAL_MODE
-                new (&available[partition_id][i]) std::atomic<bool>(false);
+                new (completion_tags[partition_id][i][s_i]) std::atomic<bool>(false);
+                length_array[partition_id][i][s_i] = 0;
 #endif
             }
+#ifdef UNIDIRECTIONAL_MODE
+            new (&available[partition_id][i]) std::atomic<bool>(false);
+#endif
         }
-        data_size["local_send_buffer"] = local_send_buffer_size;
-        data_size["send_buffer"] = send_buffer_size;
-        data_size["recv_buffer"] = recv_buffer_size;
-        // if (partition_id==0) {
-        // printf("process_edge:local_send_buffer_size:%d\n",local_send_buffer_size);
-        // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
-        // }
-        size_t basic_chunk = 64;
-        // #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
-        // MPI_Allgather(
-        //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T,
-        //     MPI_COMM_WORLD);
-        // 创建 indices 数组并填充
-        // std::vector<int> indices;
-        // for (int i = 0; i < partitions; i++) {
-        //     if (i == partition_id) continue;
-        //     indices.push_back(i);
-        // }
+    }
+    data_size["local_send_buffer"] = local_send_buffer_size;
+    data_size["send_buffer"] = send_buffer_size;
+    data_size["recv_buffer"] = recv_buffer_size;
+    // if (partition_id==0) {
+    // printf("process_edge:local_send_buffer_size:%d\n",local_send_buffer_size);
+    // printf("process_edge:send_buffer_size:%d,recv_buffer_size:%d\n",send_buffer_size/1024/1024,recv_buffer_size/1024/1024);
+    // }
+    size_t basic_chunk = 64;
+    // #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
+    // MPI_Allgather(
+    //     &owned_vertices, 1, MPI_UINT32_T, process_data_size, 1, MPI_UINT32_T,
+    //     MPI_COMM_WORLD);
+    // 创建 indices 数组并填充
+    // std::vector<int> indices;
+    // for (int i = 0; i < partitions; i++) {
+    //     if (i == partition_id) continue;
+    //     indices.push_back(i);
+    // }
 
-        // 使用 std::sort 对 indices 数组进行排序，使得 indices 按照 process_data_size
-        // 中的值从大到小排序
-        // std::sort(indices.begin(), indices.end(), [&](int a, int b) {
-        //     return process_data_size[a] > process_data_size[b];   // 从大到小排序
-        // });
+    // 使用 std::sort 对 indices 数组进行排序，使得 indices 按照 process_data_size
+    // 中的值从大到小排序
+    // std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+    //     return process_data_size[a] > process_data_size[b];   // 从大到小排序
+    // });
 
-        // INFO("process_data_size: {} {} {}
-        // {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
-        // 初始化完成后再进行操作
-        // MPI_Barrier(MPI_COMM_WORLD);
-        // #endif
-        double total_sparse_slot_outgoing_adj_list_access_time = 0;
-        unsigned long long total_sparse_slot_outgoing_adj_list_bytes = 0;
-        double total_dense_signal_incoming_adj_list_access_time = 0;
-        unsigned long long total_dense_signal_incoming_adj_list_bytes = 0;
-        if (sparse) {
+    // INFO("process_data_size: {} {} {}
+    // {}",process_data_size[0],process_data_size[1],process_data_size[2],process_data_size[3]);
+    // 初始化完成后再进行操作
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // #endif
+    double total_sparse_slot_outgoing_adj_list_access_time = 0;
+    unsigned long long total_sparse_slot_outgoing_adj_list_bytes = 0;
+    double total_dense_signal_incoming_adj_list_access_time = 0;
+    unsigned long long total_dense_signal_incoming_adj_list_bytes = 0;
+    if (sparse) {
 #ifdef PRINT_DEBUG_MESSAGES
-            if (partition_id == 0) {
-                printf("sparse mode\n");
-            }
+        if (partition_id == 0) {
+            printf("sparse mode\n");
+        }
 #endif
-            int* recv_queue = new int[partitions];
-            int recv_queue_size = 0;
-            std::mutex recv_queue_mutex;
+        int* recv_queue = new int[partitions];
+        int recv_queue_size = 0;
+        std::mutex recv_queue_mutex;
 
-            current_send_part_id = partition_id;
-            // 对自己host的点进行遍历，以basic_chunk为单位
+        current_send_part_id = partition_id;
+        // 对自己host的点进行遍历，以basic_chunk为单位
 #pragma omp parallel for
-            for (VertexId begin_v_i = partition_offset[partition_id];
-                 begin_v_i < partition_offset[partition_id + 1];
-                 begin_v_i += basic_chunk) {
-                VertexId v_i = begin_v_i;
-                unsigned long word = active->data[WORD_OFFSET(v_i)];
-                while (word != 0) {
-                    if (word & 1) {
-                        sparse_signal(v_i);   // 每个点都执行sparse_signal
-                    }
-                    v_i++;
-                    word = word >> 1;
+        for (VertexId begin_v_i = partition_offset[partition_id];
+             begin_v_i < partition_offset[partition_id + 1];
+             begin_v_i += basic_chunk) {
+            VertexId v_i = begin_v_i;
+            unsigned long word = active->data[WORD_OFFSET(v_i)];
+            while (word != 0) {
+                if (word & 1) {
+                    sparse_signal(v_i);   // 每个点都执行sparse_signal
                 }
+                v_i++;
+                word = word >> 1;
             }
+        }
 #pragma omp parallel for
-            for (int t_i = 0; t_i < threads; t_i++) {
-                flush_local_send_buffer<M>(t_i);
-            }
+        for (int t_i = 0; t_i < threads; t_i++) {
+            flush_local_send_buffer<M>(t_i);
+        }
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
-            // 此时current_send_part_id的send_buffer准备好了
-            available[partition_id][current_send_part_id].store(true, std::memory_order_release);
+        // 此时current_send_part_id的send_buffer准备好了
+        available[partition_id][current_send_part_id].store(true, std::memory_order_release);
 #endif
-            // process_edge到目前为止的时间为止
-            process_edge_time[0] = MPI_Wtime() + stream_time;
+        // process_edge到目前为止的时间为止
+        process_edge_time[0] = MPI_Wtime() + stream_time;
 
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
-            std::vector<int> indices;
-            for (int i = 0; i < partitions; i++) {
-                if (i == partition_id) continue;
-                indices.push_back(i);
-            }
-            MPI_Barrier(MPI_COMM_WORLD);
-            // MPI_Allgather(
-            //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size,
-            //     1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
-            // INFO("process_data_size: {} {} {}
-            // {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
-            std::sort(indices.begin(), indices.end(), [&](int a, int b) {
-                // return process_data_size[a] > process_data_size[b];   // 从大到小排序
-                return send_count[a][a][0] > send_count[b][b][0];
-            });
-            // INFO("indices: {} {} {}",indices[0],indices[1],indices[2]);
-            MPI_Barrier(MPI_COMM_WORLD);
+        std::vector<int> indices;
+        for (int i = 0; i < partitions; i++) {
+            if (i == partition_id) continue;
+            indices.push_back(i);
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        // MPI_Allgather(
+        //     &send_count[partition_id][partition_id], 1, MPI_UNSIGNED_LONG, process_data_size,
+        //     1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
+        // INFO("process_data_size: {} {} {}
+        // {}",send_count[0][0][0],send_count[1][1][0],send_count[2][2][0],send_count[3][3][0]);
+        std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+            // return process_data_size[a] > process_data_size[b];   // 从大到小排序
+            return send_count[a][a][0] > send_count[b][b][0];
+        });
+        // INFO("indices: {} {} {}",indices[0],indices[1],indices[2]);
+        MPI_Barrier(MPI_COMM_WORLD);
 #endif
 
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
-            std::thread comm_thread([&]() {
-                // comm_time -= MPI_Wtime();
-                // for (int step = 1; step < partitions; step++) {
-                //     int i = (partition_id - step + partitions) %
-                //             partitions;   // 确保i进程是除了自己以外的所有进程
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         // length_array == 0才进入if，但是不代表更新后的值不是0
-                //         if (!__sync_val_compare_and_swap(
-                //                 &length_array[i][partition_id][s_i],
-                //                 0,
-                //                 send_count[partition_id][partition_id][s_i])) {
-                //             // memcpy的读操作是线程安全的
-                //             memcpy(
-                //                 gim_recv_buffer[i][partition_id][s_i]->data,
-                //                 gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //                 sizeof(MsgUnit<M>) *
-                //                 send_count[partition_id][partition_id][s_i]);
-                //             // if(sizeof(MsgUnit<M>)
-                //             // *send_count[partition_id][partition_id][s_i]>0)
+        std::thread comm_thread([&]() {
+            // comm_time -= MPI_Wtime();
+            // for (int step = 1; step < partitions; step++) {
+            //     int i = (partition_id - step + partitions) %
+            //             partitions;   // 确保i进程是除了自己以外的所有进程
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         // length_array == 0才进入if，但是不代表更新后的值不是0
+            //         if (!__sync_val_compare_and_swap(
+            //                 &length_array[i][partition_id][s_i],
+            //                 0,
+            //                 send_count[partition_id][partition_id][s_i])) {
+            //             // memcpy的读操作是线程安全的
+            //             memcpy(
+            //                 gim_recv_buffer[i][partition_id][s_i]->data,
+            //                 gim_send_buffer[partition_id][partition_id][s_i]->data,
+            //                 sizeof(MsgUnit<M>) *
+            //                 send_count[partition_id][partition_id][s_i]);
+            //             // if(sizeof(MsgUnit<M>)
+            //             // *send_count[partition_id][partition_id][s_i]>0)
 
-                //             //
-                //             hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
-                //             // (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                //             //                 sizeof(MsgUnit<M>) *
-                //             // send_count[partition_id][partition_id][s_i],partition_id );
-                //             completion_tags[i][partition_id][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //         // 有没有可能send_buffer本来就是0，那么length_array本来就是0
-                //     }
-                // }
+            //             //
+            //             hl_DMA_memcpy_sync_test((uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]->data,
+            //             // (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+            //             //                 sizeof(MsgUnit<M>) *
+            //             // send_count[partition_id][partition_id][s_i],partition_id );
+            //             completion_tags[i][partition_id][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //         // 有没有可能send_buffer本来就是0，那么length_array本来就是0
+            //     }
+            // }
 
-                for (int i : indices) {
-                    for (int s_i = 0; s_i < sockets; s_i++) {
-                        // length_array == 0才进入if，但是不代表更新后的值不是0
-                        if (!__sync_val_compare_and_swap(
-                                &length_array[i][partition_id][s_i],
-                                0,
-                                send_count[partition_id][partition_id][s_i])) {
-                            // memcpy的读操作是线程安全的
-                            // memcpy(
-                            //     gim_recv_buffer[i][partition_id][s_i]->data,
-                            //     gim_send_buffer[partition_id][partition_id][s_i]->data,
-                            //     sizeof(MsgUnit<M>) *
-                            //     send_count[partition_id][partition_id][s_i]);
-                            if (send_count[partition_id][partition_id][s_i] > 0)
+            for (int i : indices) {
+                for (int s_i = 0; s_i < sockets; s_i++) {
+                    // length_array == 0才进入if，但是不代表更新后的值不是0
+                    if (!__sync_val_compare_and_swap(&length_array[i][partition_id][s_i],
+                                                     0,
+                                                     send_count[partition_id][partition_id][s_i])) {
+                        // memcpy的读操作是线程安全的
+                        // memcpy(
+                        //     gim_recv_buffer[i][partition_id][s_i]->data,
+                        //     gim_send_buffer[partition_id][partition_id][s_i]->data,
+                        //     sizeof(MsgUnit<M>) *
+                        //     send_count[partition_id][partition_id][s_i]);
+                        if (send_count[partition_id][partition_id][s_i] > 0)
 
-                                //
-                                if (sizeof(MsgUnit<M>) *
-                                        send_count[partition_id][partition_id][s_i] >
-                                    DMA_SIZE)
-                                    hl_DMA_memcpy_sync_test(
-                                        (uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]
-                                            ->data,
-                                        (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                        sizeof(MsgUnit<M>) *
-                                            send_count[partition_id][partition_id][s_i],
-                                        partition_id);
-                                else
-                                    memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
-                                           gim_send_buffer[partition_id][partition_id][s_i]->data,
-                                           sizeof(MsgUnit<M>) *
-                                               send_count[partition_id][partition_id][s_i]);
-                            // INFO("{} to {} SPARSE PUT SIZE IS
-                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
-                            // send_count[partition_id][partition_id][s_i]);
-                            completion_tags[i][partition_id][s_i]->store(true,
-                                                                         std::memory_order_release);
-                        }
+                            //
+                            if (sizeof(MsgUnit<M>) * send_count[partition_id][partition_id][s_i] >
+                                DMA_SIZE)
+                                hl_DMA_memcpy_sync_test(
+                                    (uint8_t*)gim_send_buffer[partition_id][partition_id][s_i]
+                                        ->data,
+                                    (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                    sizeof(MsgUnit<M>) *
+                                        send_count[partition_id][partition_id][s_i],
+                                    partition_id);
+                            else
+                                memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                       gim_send_buffer[partition_id][partition_id][s_i]->data,
+                                       sizeof(MsgUnit<M>) *
+                                           send_count[partition_id][partition_id][s_i]);
+                        // INFO("{} to {} SPARSE PUT SIZE IS
+                        // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                        // send_count[partition_id][partition_id][s_i]);
+                        completion_tags[i][partition_id][s_i]->store(true,
+                                                                     std::memory_order_release);
                     }
                 }
+            }
 
 #    ifdef GET
-                // std::vector<int> pending_buffer;
-                // std::queue<int> pending_buffer;
-                // 自己的任务结束了，开始get操作
-                // for (int step = 1; step < partitions; step++) {
-                //     int i = (partition_id - step + partitions) % partitions;
-                //     // 首先判断是否available
-                //     if (!available[i][i].load()) {
-                //         // 先记录下来
-                //         // pending_buffer.push(i);
-                //         // pending_buffer.push_back(i);
-                //         continue;
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][i][s_i] &&
-                //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][i][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // std::vector<int> pending_buffer;
+            // std::queue<int> pending_buffer;
+            // 自己的任务结束了，开始get操作
+            // for (int step = 1; step < partitions; step++) {
+            //     int i = (partition_id - step + partitions) % partitions;
+            //     // 首先判断是否available
+            //     if (!available[i][i].load()) {
+            //         // 先记录下来
+            //         // pending_buffer.push(i);
+            //         // pending_buffer.push_back(i);
+            //         continue;
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][i][s_i] &&
+            //             !__sync_val_compare_and_swap(
+            //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][i][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 
-                std::vector<bool> executed(partitions, false);
-                bool all_finished = false;
-                while (!all_finished) {
-                    all_finished = true;
-                    for (int i : indices) {
-                        if (executed[i]) {
-                            continue;
-                        }
-                        if (!available[i][i].load()) {
-                            all_finished = false;
-                            continue;
-                        }
-                        // sequence.push_back(i);
-                        for (int s_i = 0; s_i < sockets; s_i++) {
-                            if (send_count[i][i][s_i] &&
-                                !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
-                                                             0,
-                                                             send_count[i][i][s_i])) {
-                                // memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                //     gim_send_buffer[i][i][s_i]->data,
-                                //     sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                if (sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
-                                    hl_DMA_memcpy_sync_test(
-                                        (uint8_t*)gim_send_buffer[i][i][s_i]->data,
-                                        (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
-                                        sizeof(MsgUnit<M>) * send_count[i][i][s_i],
-                                        partition_id);
-                                else
-                                    memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                                           gim_send_buffer[i][i][s_i]->data,
-                                           sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                completion_tags[partition_id][i][s_i]->store(
-                                    true, std::memory_order_release);
-
-                                // INFO("{} from {} SPARSE GET SIZE IS
-                                // {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                                // success.push_back(1);
-                            } else {
-                                // success.push_back(0);
-                            }
-                        }
-                        executed[i] = true;
-                        all_finished = false;
-                        break;
+            std::vector<bool> executed(partitions, false);
+            bool all_finished = false;
+            while (!all_finished) {
+                all_finished = true;
+                for (int i : indices) {
+                    if (executed[i]) {
+                        continue;
                     }
+                    if (!available[i][i].load()) {
+                        all_finished = false;
+                        continue;
+                    }
+                    // sequence.push_back(i);
+                    for (int s_i = 0; s_i < sockets; s_i++) {
+                        if (send_count[i][i][s_i] &&
+                            !__sync_val_compare_and_swap(
+                                &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+                            // memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                            //     gim_send_buffer[i][i][s_i]->data,
+                            //     sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                            if (sizeof(MsgUnit<M>) * send_count[i][i][s_i] > DMA_SIZE)
+                                hl_DMA_memcpy_sync_test(
+                                    (uint8_t*)gim_send_buffer[i][i][s_i]->data,
+                                    (uint8_t*)gim_recv_buffer[partition_id][i][s_i]->data,
+                                    sizeof(MsgUnit<M>) * send_count[i][i][s_i],
+                                    partition_id);
+                            else
+                                memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+                                       gim_send_buffer[i][i][s_i]->data,
+                                       sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                            completion_tags[partition_id][i][s_i]->store(true,
+                                                                         std::memory_order_release);
+
+                            // INFO("{} from {} SPARSE GET SIZE IS
+                            // {}.",partition_id,i,sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+                            // success.push_back(1);
+                        } else {
+                            // success.push_back(0);
+                        }
+                    }
+                    executed[i] = true;
+                    all_finished = false;
+                    break;
                 }
+            }
 
-                // for(auto i : pending_buffer){
-                //     while(!available[i][i].load()){
-                //         __asm volatile("pause" ::: "memory");
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][i][s_i] &&
-                //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][i][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // for(auto i : pending_buffer){
+            //     while(!available[i][i].load()){
+            //         __asm volatile("pause" ::: "memory");
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][i][s_i] &&
+            //             !__sync_val_compare_and_swap(
+            //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][i][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 
-                // while(!pending_buffer.empty()){
-                //     int i = pending_buffer.front();
-                //     pending_buffer.pop();
-                //     if (!available[i][i].load()) {
-                //         pending_buffer.push(i);
-                //         continue;
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][i][s_i] &&
-                //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][i][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // while(!pending_buffer.empty()){
+            //     int i = pending_buffer.front();
+            //     pending_buffer.pop();
+            //     if (!available[i][i].load()) {
+            //         pending_buffer.push(i);
+            //         continue;
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][i][s_i] &&
+            //             !__sync_val_compare_and_swap(
+            //                 &length_array[partition_id][i][s_i], 0, send_count[i][i][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][i][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][i][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 
 
-                // std::queue<int> ready_tasks;
-                // std::queue<int> waiting_tasks;
+            // std::queue<int> ready_tasks;
+            // std::queue<int> waiting_tasks;
 
-                // while (true) {
-                //     // 锁住共享资源
-                //     std::unique_lock<std::mutex> lock(mtx);
+            // while (true) {
+            //     // 锁住共享资源
+            //     std::unique_lock<std::mutex> lock(mtx);
 
-                //     // 检查队列中哪些任务可以处理
-                //     while (!pending_buffer.empty()) {
-                //         int task = pending_buffer.front();
-                //         pending_buffer.pop();
+            //     // 检查队列中哪些任务可以处理
+            //     while (!pending_buffer.empty()) {
+            //         int task = pending_buffer.front();
+            //         pending_buffer.pop();
 
-                //         if (available[task][task].load()) {
-                //             ready_tasks.push(task);
-                //         } else {
-                //             waiting_tasks.push(task);
-                //         }
-                //     }
+            //         if (available[task][task].load()) {
+            //             ready_tasks.push(task);
+            //         } else {
+            //             waiting_tasks.push(task);
+            //         }
+            //     }
 
-                //     // 如果没有任务可以处理，阻塞等待通知
-                //     if (ready_tasks.empty()) {
-                //         cv.wait(lock, [&]() {
-                //             return std::any_of(waiting_tasks.begin(), waiting_tasks.end(),
-                //             [&](int task) {
-                //                 return available[task][task].load();
-                //             });
-                //         });
-                //     }
+            //     // 如果没有任务可以处理，阻塞等待通知
+            //     if (ready_tasks.empty()) {
+            //         cv.wait(lock, [&]() {
+            //             return std::any_of(waiting_tasks.begin(), waiting_tasks.end(),
+            //             [&](int task) {
+            //                 return available[task][task].load();
+            //             });
+            //         });
+            //     }
 
-                //     // 释放锁后处理任务
-                //     lock.unlock();
+            //     // 释放锁后处理任务
+            //     lock.unlock();
 
-                //     // 处理就绪任务
-                //     while (!ready_tasks.empty()) {
-                //         int task = ready_tasks.front();
-                //         ready_tasks.pop();
-                //         // 处理任务逻辑
-                //     }
+            //     // 处理就绪任务
+            //     while (!ready_tasks.empty()) {
+            //         int task = ready_tasks.front();
+            //         ready_tasks.pop();
+            //         // 处理任务逻辑
+            //     }
 
-                //     // 将未准备好的任务重新加入队列
-                //     std::lock_guard<std::mutex> relock(mtx);
-                //     while (!waiting_tasks.empty()) {
-                //         pending_buffer.push(waiting_tasks.front());
-                //         waiting_tasks.pop();
-                //     }
-                // }
+            //     // 将未准备好的任务重新加入队列
+            //     std::lock_guard<std::mutex> relock(mtx);
+            //     while (!waiting_tasks.empty()) {
+            //         pending_buffer.push(waiting_tasks.front());
+            //         waiting_tasks.pop();
+            //     }
+            // }
 #    endif
-                // comm_time += MPI_Wtime();
-            });
+            // comm_time += MPI_Wtime();
+        });
 
-            int expected_partition = partition_id + 1;
-            // 标记有接收自己的消息
-            completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
+        int expected_partition = partition_id + 1;
+        // 标记有接收自己的消息
+        completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
 #else
             recv_queue[recv_queue_size] = partition_id;
             recv_queue_mutex.lock();   // 为啥这里用锁了不用原子变量
@@ -3799,25 +3858,25 @@ public:
             });
 #endif
 
-            // 现在数据都到每个host的recv_buffer里了
-            std::thread check_thread;
-            // check_thread = std::thread(
-            //     check_blocking, std::ref(recv_queue_mutex), std::ref(recv_queue_size), 0);
-            for (int step = 0; step < partitions; step++) {   // 遍历所有分区，这里是串行的
+        // 现在数据都到每个host的recv_buffer里了
+        std::thread check_thread;
+        // check_thread = std::thread(
+        //     check_blocking, std::ref(recv_queue_mutex), std::ref(recv_queue_size), 0);
+        for (int step = 0; step < partitions; step++) {   // 遍历所有分区，这里是串行的
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
-                while (true) {
-                    // 最先处理自己的消息
-                    expected_partition = (expected_partition - 1 + partitions) % partitions;
+            while (true) {
+                // 最先处理自己的消息
+                expected_partition = (expected_partition - 1 + partitions) % partitions;
 
-                    bool expected = true;
+                bool expected = true;
 
-                    // 只看第一个socket
-                    if (completion_tags[partition_id][expected_partition][0]
-                            ->compare_exchange_strong(expected, false))
-                        break;
-                }
+                // 只看第一个socket
+                if (completion_tags[partition_id][expected_partition][0]->compare_exchange_strong(
+                        expected, false))
+                    break;
+            }
 
-                int i = expected_partition;
+            int i = expected_partition;
 #else
 
                 // while (true) {
@@ -3838,34 +3897,32 @@ public:
                 int i = recv_queue[step];
 #endif
 
-                global_current_send_part_id[partition_id] = i;
-                // MessageBuffer** used_buffer;
-                GIMMessageBuffer** used_buffer;
-                if (i == partition_id) {
-                    // used_buffer = send_buffer[i];   // MessageBuffer**
-                    used_buffer = gim_send_buffer[partition_id][i];
-                } else {
-                    // used_buffer = recv_buffer[i];
-                    used_buffer = gim_recv_buffer[partition_id][i];
+            global_current_send_part_id[partition_id] = i;
+            // MessageBuffer** used_buffer;
+            GIMMessageBuffer** used_buffer;
+            if (i == partition_id) {
+                // used_buffer = send_buffer[i];   // MessageBuffer**
+                used_buffer = gim_send_buffer[partition_id][i];
+            } else {
+                // used_buffer = recv_buffer[i];
+                used_buffer = gim_recv_buffer[partition_id][i];
+            }
+            for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历所有socket
+                // 如果socket的消息还没有收到,等待，i==partition时已经准备好了
+                while (i != partition_id && s_i &&
+                       !completion_tags[partition_id][i][s_i]->load(std::memory_order_relaxed)) {
+                    __asm volatile("pause" ::: "memory");
                 }
-                for (int s_i = 0; s_i < sockets; s_i++) {   // 遍历所有socket
-                    // 如果socket的消息还没有收到,等待，i==partition时已经准备好了
-                    while (
-                        i != partition_id && s_i &&
-                        !completion_tags[partition_id][i][s_i]->load(std::memory_order_relaxed)) {
-                        __asm volatile("pause" ::: "memory");
-                    }
 
-                    MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]
-                                             ->data;   // 将(MessageBuffer*)->data转为(MsgUnit<M>
-                                                       //  s_i表示第s_i个socket的buffer
+                MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]
+                                         ->data;   // 将(MessageBuffer*)->data转为(MsgUnit<M>
+                                                   //  s_i表示第s_i个socket的buffer
 #ifdef SPARSE_MODE_UNIDIRECTIONAL
-                    size_t buffer_size =
-                        (i == partition_id)
-                            ? send_count[partition_id][partition_id][s_i]
-                            : length_array[partition_id][i]
-                                          [s_i];   // send_buffer[i][s_i]->count 第i个host
-                                                   // s_i个socket的buffersize
+                size_t buffer_size =
+                    (i == partition_id)
+                        ? send_count[partition_id][partition_id][s_i]
+                        : length_array[partition_id][i][s_i];   // send_buffer[i][s_i]->count
+                                                                // 第i个host s_i个socket的buffersize
 #else
                     size_t buffer_size =
                         (i == partition_id)
@@ -3873,20 +3930,20 @@ public:
                             : used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
                                                          // s_i个socket的buffersize
 #endif
-                    for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
-                        // 确定每个线程负责buffer的哪个部分,每个socket内的线程分工，不同socket的线程可能处理同样的任务
-                        //  int s_i = get_socket_id(t_i);
-                        int s_j = get_socket_offset(t_i);
-                        VertexId partition_size = buffer_size;
-                        thread_state[t_i]->curr =
-                            partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
-                        thread_state[t_i]->end = partition_size / threads_per_socket / basic_chunk *
-                                                 basic_chunk * (s_j + 1);
-                        if (s_j == threads_per_socket - 1) {
-                            thread_state[t_i]->end = buffer_size;
-                        }
-                        thread_state[t_i]->status = WORKING;
+                for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
+                    // 确定每个线程负责buffer的哪个部分,每个socket内的线程分工，不同socket的线程可能处理同样的任务
+                    //  int s_i = get_socket_id(t_i);
+                    int s_j = get_socket_offset(t_i);
+                    VertexId partition_size = buffer_size;
+                    thread_state[t_i]->curr =
+                        partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
+                    thread_state[t_i]->end =
+                        partition_size / threads_per_socket / basic_chunk * basic_chunk * (s_j + 1);
+                    if (s_j == threads_per_socket - 1) {
+                        thread_state[t_i]->end = buffer_size;
                     }
+                    thread_state[t_i]->status = WORKING;
+                }
 #ifdef STATISTICS_BANDWIDTH
 #    pragma omp parallel reduction(+ : reducer,                                         \
                                        total_sparse_slot_outgoing_adj_list_access_time, \
@@ -3894,32 +3951,41 @@ public:
 #else
 #    pragma omp parallel reduction(+ : reducer)
 #endif
-                    {
-                        R local_reducer = 0;
-                        double local_lambda_time = 0;
-                        unsigned long long local_lambda_bytes = 0;
-                        int thread_id = omp_get_thread_num();
-                        int s_i = get_socket_id(thread_id);
-                        // 执行sparse_slot
-                        while (true) {
-                            // 线程开始从自己负责的部分开始获取任务
-                            VertexId b_i =
-                                __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                            if (b_i >= thread_state[thread_id]->end) break;
-                            VertexId begin_b_i = b_i;
-                            VertexId end_b_i = b_i + basic_chunk;
-                            if (end_b_i > thread_state[thread_id]->end) {
-                                end_b_i = thread_state[thread_id]->end;
-                            }
-                            // 获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
-                            for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
-                                VertexId v_i = buffer[b_i].vertex;
-                                M msg_data = buffer[b_i].msg_data;
-                                if (outgoing_adj_bitmap[s_i]->get_bit(
-                                        v_i)) {   // 如果v_i在s_i socket内有出边
+                {
+                    R local_reducer = 0;
+                    double local_lambda_time = 0;
+                    unsigned long long local_lambda_bytes = 0;
+                    int thread_id = omp_get_thread_num();
+                    int s_i = get_socket_id(thread_id);
+                    // 执行sparse_slot
+                    while (true) {
+                        // 线程开始从自己负责的部分开始获取任务
+                        VertexId b_i =
+                            __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
+                        if (b_i >= thread_state[thread_id]->end) break;
+                        VertexId begin_b_i = b_i;
+                        VertexId end_b_i = b_i + basic_chunk;
+                        if (end_b_i > thread_state[thread_id]->end) {
+                            end_b_i = thread_state[thread_id]->end;
+                        }
+                        // 获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
+                        for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+                            VertexId v_i = buffer[b_i].vertex;
+                            M msg_data = buffer[b_i].msg_data;
+                            if (outgoing_adj_bitmap[s_i]->get_bit(
+                                    v_i)) {   // 如果v_i在s_i socket内有出边
 #ifdef STATISTICS_BANDWIDTH
-                                    double lambda_start_time = get_time();
+                                double lambda_start_time = get_time();
 #endif
+#ifdef COMPRESS
+                                local_reducer += sparse_slot(
+                                    v_i,
+                                    msg_data,
+                                    compressed_outgoing_adj_list[s_i] +
+                                        outgoing_adj_index[s_i][v_i],   // s_i内v_i的出边开始,
+                                    outgoing_adj_index[s_i][v_i + 1] - outgoing_adj_index[s_i][v_i],
+                                    -1);   // s_i内v_i的出边结束
+#else
                                     local_reducer += sparse_slot(
                                         v_i,
                                         msg_data,
@@ -3931,38 +3997,48 @@ public:
                                             outgoing_adj_list[s_i] +
                                                 outgoing_adj_index[s_i][v_i + 1]),
                                         -1);   // s_i内v_i的出边结束
-#ifdef STATISTICS_BANDWIDTH
-                                    double lambda_end_time = get_time();
-                                    local_lambda_time += (lambda_end_time - lambda_start_time);
-                                    local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
-                                                           outgoing_adj_index[s_i][v_i]) *
-                                                          sizeof(AdjUnit<EdgeData>);
 #endif
-                                }
+#ifdef STATISTICS_BANDWIDTH
+                                double lambda_end_time = get_time();
+                                local_lambda_time += (lambda_end_time - lambda_start_time);
+                                local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
+                                                       outgoing_adj_index[s_i][v_i]) *
+                                                      sizeof(AdjUnit<EdgeData>);
+#endif
                             }
                         }
-                        // 工作窃取
-                        thread_state[thread_id]->status = STEALING;
-                        for (int t_offset = 1; t_offset < threads; t_offset++) {
-                            int t_i = (thread_id + t_offset) % threads;
-                            if (thread_state[t_i]->status == STEALING) continue;
-                            while (true) {
-                                VertexId b_i =
-                                    __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
-                                if (b_i >= thread_state[t_i]->end) break;
-                                VertexId begin_b_i = b_i;
-                                VertexId end_b_i = b_i + basic_chunk;
-                                if (end_b_i > thread_state[t_i]->end) {
-                                    end_b_i = thread_state[t_i]->end;
-                                }
-                                int s_i = get_socket_id(t_i);
-                                for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
-                                    VertexId v_i = buffer[b_i].vertex;
-                                    M msg_data = buffer[b_i].msg_data;
-                                    if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
+                    }
+                    // 工作窃取
+                    thread_state[thread_id]->status = STEALING;
+                    for (int t_offset = 1; t_offset < threads; t_offset++) {
+                        int t_i = (thread_id + t_offset) % threads;
+                        if (thread_state[t_i]->status == STEALING) continue;
+                        while (true) {
+                            VertexId b_i =
+                                __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
+                            if (b_i >= thread_state[t_i]->end) break;
+                            VertexId begin_b_i = b_i;
+                            VertexId end_b_i = b_i + basic_chunk;
+                            if (end_b_i > thread_state[t_i]->end) {
+                                end_b_i = thread_state[t_i]->end;
+                            }
+                            int s_i = get_socket_id(t_i);
+                            for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+                                VertexId v_i = buffer[b_i].vertex;
+                                M msg_data = buffer[b_i].msg_data;
+                                if (outgoing_adj_bitmap[s_i]->get_bit(v_i)) {
 #ifdef STATISTICS_BANDWIDTH
-                                        double lambda_start_time = get_time();
+                                    double lambda_start_time = get_time();
 #endif
+#ifdef COMPRESS
+                                    local_reducer += sparse_slot(v_i,
+                                                                 msg_data,
+                                                                 compressed_outgoing_adj_list[s_i] +
+                                                                     outgoing_adj_index[s_i][v_i],
+                                                                 outgoing_adj_index[s_i][v_i + 1] -
+                                                                     outgoing_adj_index[s_i][v_i],
+                                                                 i);
+#else
                                         local_reducer += sparse_slot(
                                             v_i,
                                             msg_data,
@@ -3973,346 +4049,344 @@ public:
                                                 outgoing_adj_list[s_i] +
                                                     outgoing_adj_index[s_i][v_i + 1]),
                                             -1);
-#ifdef STATISTICS_BANDWIDTH
-                                        double lambda_end_time = get_time();
-                                        local_lambda_time += (lambda_end_time - lambda_start_time);
-                                        local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
-                                                               outgoing_adj_index[s_i][v_i]) *
-                                                              sizeof(AdjUnit<EdgeData>);
 #endif
-                                    }
+#ifdef STATISTICS_BANDWIDTH
+                                    double lambda_end_time = get_time();
+                                    local_lambda_time += (lambda_end_time - lambda_start_time);
+                                    local_lambda_bytes += (outgoing_adj_index[s_i][v_i + 1] -
+                                                           outgoing_adj_index[s_i][v_i]) *
+                                                          sizeof(AdjUnit<EdgeData>);
+#endif
                                 }
                             }
                         }
-                        reducer += local_reducer;
+                    }
+                    reducer += local_reducer;
 #ifdef STATISTICS_BANDWIDTH
-                        total_sparse_slot_outgoing_adj_list_access_time += local_lambda_time;
-                        total_sparse_slot_outgoing_adj_list_bytes += local_lambda_bytes;
+                    total_sparse_slot_outgoing_adj_list_access_time += local_lambda_time;
+                    total_sparse_slot_outgoing_adj_list_bytes += local_lambda_bytes;
 #endif
-                    }
-                    while (stealingss[partition_id] != 0) {
-                        // printf("stealings:%d\n", stealingss[partition_id]);
-                        __asm volatile("pause" ::: "memory");
-                    }
                 }
-#ifdef GLOBAL_STEALING_SPRASE
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) % partitions;
-                    // 怎么判断这个节点需不需要工作窃取
-                    if (!waiting) break;
-                    __sync_fetch_and_add(&stealingss[i], 1);
-                    //  stealings[i]++;
-#    pragma omp parallel reduction(+ : reducer)
-                    {
-                        R local_reducer = 0;
-                        int thread_id = omp_get_thread_num();
-
-                        for (int t_offset = 0; t_offset < threads; t_offset++) {
-                            if (!waiting) break;
-                            int t_i = (thread_id + t_offset) % threads;
-                            if (gim_thread_state[i][t_i]->status == STEALING) continue;
-                            while (waiting) {
-                                VertexId b_i = __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
-                                                                    basic_chunk);
-                                if (b_i >= gim_thread_state[i][t_i]->end) break;
-                                VertexId begin_b_i = b_i;
-                                VertexId end_b_i = b_i + basic_chunk;
-                                if (end_b_i > gim_thread_state[i][t_i]->end) {
-                                    end_b_i = gim_thread_state[i][t_i]->end;
-                                }
-                                int s_i = get_socket_id(t_i);
-                                for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
-                                    // VertexId v_i = buffer[b_i].vertex;
-                                    // M msg_data = buffer[b_i].msg_data;
-                                    MsgUnit<M>* buffer;
-                                    if (global_current_send_part_id[i] == i) {
-                                        buffer = (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
-                                    } else {
-                                        buffer =
-                                            (MsgUnit<M>*)
-                                                gim_recv_buffer[i][global_current_send_part_id[i]]
-                                                               [0]
-                                                                   ->data;
-                                    }
-                                    VertexId v_i = buffer[b_i].vertex;
-                                    M msg_data = buffer[b_i].msg_data;
-                                    if (gim_outgoing_adj_bitmap[i][s_i]->get_bit(v_i)) {
-                                        local_reducer += sparse_slot(
-                                            v_i,
-                                            msg_data,
-                                            VertexAdjList<EdgeData>(
-
-                                                gim_outgoing_adj_list[i][s_i] +
-                                                    gim_outgoing_adj_index[i][s_i][v_i],
-                                                gim_outgoing_adj_list[i][s_i] +
-                                                    gim_outgoing_adj_index[i][s_i][v_i + 1]),
-                                            i);
-                                    }
-                                }
-                            }
-                        }
-                        reducer += local_reducer;
-                    }
-
-                    // stealings[i]--;
-                    __sync_fetch_and_add(&stealingss[i], -1);
+                while (stealingss[partition_id] != 0) {
+                    // printf("stealings:%d\n", stealingss[partition_id]);
+                    __asm volatile("pause" ::: "memory");
                 }
-#endif
             }
-#ifdef SPARSE_MODE_UNIDIRECTIONAL
-            comm_thread.join();
+#ifdef GLOBAL_STEALING_SPRASE
+            for (int step = 1; step < partitions; step++) {
+                int i = (partition_id - step + partitions) % partitions;
+                // 怎么判断这个节点需不需要工作窃取
+                if (!waiting) break;
+                __sync_fetch_and_add(&stealingss[i], 1);
+                //  stealings[i]++;
+#    pragma omp parallel reduction(+ : reducer)
+                {
+                    R local_reducer = 0;
+                    int thread_id = omp_get_thread_num();
+
+                    for (int t_offset = 0; t_offset < threads; t_offset++) {
+                        if (!waiting) break;
+                        int t_i = (thread_id + t_offset) % threads;
+                        if (gim_thread_state[i][t_i]->status == STEALING) continue;
+                        while (waiting) {
+                            VertexId b_i =
+                                __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr, basic_chunk);
+                            if (b_i >= gim_thread_state[i][t_i]->end) break;
+                            VertexId begin_b_i = b_i;
+                            VertexId end_b_i = b_i + basic_chunk;
+                            if (end_b_i > gim_thread_state[i][t_i]->end) {
+                                end_b_i = gim_thread_state[i][t_i]->end;
+                            }
+                            int s_i = get_socket_id(t_i);
+                            for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+                                // VertexId v_i = buffer[b_i].vertex;
+                                // M msg_data = buffer[b_i].msg_data;
+                                MsgUnit<M>* buffer;
+                                if (global_current_send_part_id[i] == i) {
+                                    buffer = (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
+                                } else {
+                                    buffer =
+                                        (MsgUnit<M>*)
+                                            gim_recv_buffer[i][global_current_send_part_id[i]][0]
+                                                ->data;
+                                }
+                                VertexId v_i = buffer[b_i].vertex;
+                                M msg_data = buffer[b_i].msg_data;
+                                if (gim_outgoing_adj_bitmap[i][s_i]->get_bit(v_i)) {
+                                    local_reducer += sparse_slot(
+                                        v_i,
+                                        msg_data,
+                                        VertexAdjList<EdgeData>(
+
+                                            gim_outgoing_adj_list[i][s_i] +
+                                                gim_outgoing_adj_index[i][s_i][v_i],
+                                            gim_outgoing_adj_list[i][s_i] +
+                                                gim_outgoing_adj_index[i][s_i][v_i + 1]),
+                                        i);
+                                }
+                            }
+                        }
+                    }
+                    reducer += local_reducer;
+                }
+
+                // stealings[i]--;
+                __sync_fetch_and_add(&stealingss[i], -1);
+            }
 #endif
-            // 全局工作窃取
-            // TODO: fix socket
-            // #ifdef GLOBAL_STEALING_SPRASE
-            //             for (int step = 1; step < partitions; step++) {
-            //                 int i = (partition_id - step + partitions) % partitions;
-            //                 // 怎么判断这个节点需不需要工作窃取
-            //                 __sync_fetch_and_add(&stealingss[i], 1);
-            //                 //  stealings[i]++;
-            // #    pragma omp parallel reduction(+ : reducer)
-            //                 {
-            //                     R local_reducer = 0;
-            //                     int thread_id = omp_get_thread_num();
+        }
+#ifdef SPARSE_MODE_UNIDIRECTIONAL
+        comm_thread.join();
+#endif
+        // 全局工作窃取
+        // TODO: fix socket
+        // #ifdef GLOBAL_STEALING_SPRASE
+        //             for (int step = 1; step < partitions; step++) {
+        //                 int i = (partition_id - step + partitions) % partitions;
+        //                 // 怎么判断这个节点需不需要工作窃取
+        //                 __sync_fetch_and_add(&stealingss[i], 1);
+        //                 //  stealings[i]++;
+        // #    pragma omp parallel reduction(+ : reducer)
+        //                 {
+        //                     R local_reducer = 0;
+        //                     int thread_id = omp_get_thread_num();
 
-            //                     for (int t_offset = 0; t_offset < threads; t_offset++) {
-            //                         int t_i = (thread_id + t_offset) % threads;
-            //                         if (gim_thread_state[i][t_i]->status == STEALING) continue;
-            //                         while (true) {
-            //                             VertexId b_i =
-            //                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
-            //                                 basic_chunk);
-            //                             if (b_i >= gim_thread_state[i][t_i]->end) break;
-            //                             VertexId begin_b_i = b_i;
-            //                             VertexId end_b_i = b_i + basic_chunk;
-            //                             if (end_b_i > gim_thread_state[i][t_i]->end) {
-            //                                 end_b_i = gim_thread_state[i][t_i]->end;
-            //                             }
-            //                             int s_i = get_socket_id(t_i);
-            //                             for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
-            //                                 // VertexId v_i = buffer[b_i].vertex;
-            //                                 // M msg_data = buffer[b_i].msg_data;
-            //                                 MsgUnit<M>* buffer;
-            //                                 if (global_current_send_part_id[i] == i) {
-            //                                     buffer =
-            //                                     (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
-            //                                 } else {
-            //                                     buffer =
-            //                                         (MsgUnit<M>*)
-            //                                             gim_recv_buffer[i][global_current_send_part_id[i]][0]
-            //                                                 ->data;
-            //                                 }
-            //                                 VertexId v_i = buffer[b_i].vertex;
-            //                                 M msg_data = buffer[b_i].msg_data;
-            //                                 if (gim_outgoing_adj_bitmap[i][s_i]->get_bit(v_i)) {
-            //                                     local_reducer += sparse_slot(
-            //                                         v_i,
-            //                                         msg_data,
-            //                                         VertexAdjList<
-            //                                             EdgeData>(   //
-            //                                             这里只是两个指针，具体数据是存放邻居的数组
-            //                                             gim_outgoing_adj_list[i][s_i] +
-            //                                                 gim_outgoing_adj_index[i][s_i][v_i],
-            //                                             gim_outgoing_adj_list[i][s_i] +
-            //                                                 gim_outgoing_adj_index[i][s_i][v_i +
-            //                                                 1]),
-            //                                         i);
-            //                                 }
-            //                             }
-            //                         }
-            //                     }
-            //                     reducer += local_reducer;
-            //                 }
+        //                     for (int t_offset = 0; t_offset < threads; t_offset++) {
+        //                         int t_i = (thread_id + t_offset) % threads;
+        //                         if (gim_thread_state[i][t_i]->status == STEALING) continue;
+        //                         while (true) {
+        //                             VertexId b_i =
+        //                                 __sync_fetch_and_add(&gim_thread_state[i][t_i]->curr,
+        //                                 basic_chunk);
+        //                             if (b_i >= gim_thread_state[i][t_i]->end) break;
+        //                             VertexId begin_b_i = b_i;
+        //                             VertexId end_b_i = b_i + basic_chunk;
+        //                             if (end_b_i > gim_thread_state[i][t_i]->end) {
+        //                                 end_b_i = gim_thread_state[i][t_i]->end;
+        //                             }
+        //                             int s_i = get_socket_id(t_i);
+        //                             for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+        //                                 // VertexId v_i = buffer[b_i].vertex;
+        //                                 // M msg_data = buffer[b_i].msg_data;
+        //                                 MsgUnit<M>* buffer;
+        //                                 if (global_current_send_part_id[i] == i) {
+        //                                     buffer =
+        //                                     (MsgUnit<M>*)gim_send_buffer[i][i][0]->data;
+        //                                 } else {
+        //                                     buffer =
+        //                                         (MsgUnit<M>*)
+        //                                             gim_recv_buffer[i][global_current_send_part_id[i]][0]
+        //                                                 ->data;
+        //                                 }
+        //                                 VertexId v_i = buffer[b_i].vertex;
+        //                                 M msg_data = buffer[b_i].msg_data;
+        //                                 if (gim_outgoing_adj_bitmap[i][s_i]->get_bit(v_i)) {
+        //                                     local_reducer += sparse_slot(
+        //                                         v_i,
+        //                                         msg_data,
+        //                                         VertexAdjList<
+        //                                             EdgeData>(   //
+        //                                             这里只是两个指针，具体数据是存放邻居的数组
+        //                                             gim_outgoing_adj_list[i][s_i] +
+        //                                                 gim_outgoing_adj_index[i][s_i][v_i],
+        //                                             gim_outgoing_adj_list[i][s_i] +
+        //                                                 gim_outgoing_adj_index[i][s_i][v_i +
+        //                                                 1]),
+        //                                         i);
+        //                                 }
+        //                             }
+        //                         }
+        //                     }
+        //                     reducer += local_reducer;
+        //                 }
 
-            //                 // stealings[i]--;
-            //                 __sync_fetch_and_add(&stealingss[i], -1);
-            //             }
-            // #endif
+        //                 // stealings[i]--;
+        //                 __sync_fetch_and_add(&stealingss[i], -1);
+        //             }
+        // #endif
 #ifndef SPARSE_MODE_UNIDIRECTIONAL
+        send_thread.join();
+        recv_thread.join();
+#endif
+#ifdef STATISTICS_BANDWIDTH
+        printf("SPARE partition %d , Time = %f s, Total Bytes = %llu, Bandwidth = %f GB/s\n",
+               partition_id,
+               total_sparse_slot_outgoing_adj_list_access_time,
+               total_sparse_slot_outgoing_adj_list_bytes,
+               (double)total_sparse_slot_outgoing_adj_list_bytes /
+                   total_sparse_slot_outgoing_adj_list_access_time / (1024 * 1024 * 1024));
+#endif
+        // 发送线程和计算均结束的时候
+        process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
+        delete[] recv_queue;
+    } else {
+        // dense selective bitmap
+        if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
+            double sync_time = 0;
+            sync_time -= get_time();
+            std::thread send_thread([&]() {
+                for (int step = 1; step < partitions; step++) {
+                    int recipient_id = (partition_id + step) % partitions;
+                    MPI_Send(dense_selective->data + WORD_OFFSET(partition_offset[partition_id]),
+                             owned_vertices / 64,
+                             MPI_UNSIGNED_LONG,
+                             recipient_id,
+                             PassMessage,
+                             MPI_COMM_WORLD);
+                }
+            });
+            std::thread recv_thread([&]() {
+                for (int step = 1; step < partitions; step++) {
+                    int sender_id = (partition_id - step + partitions) % partitions;
+                    MPI_Recv(dense_selective->data + WORD_OFFSET(partition_offset[sender_id]),
+                             (partition_offset[sender_id + 1] - partition_offset[sender_id]) / 64,
+                             MPI_UNSIGNED_LONG,
+                             sender_id,
+                             PassMessage,
+                             MPI_COMM_WORLD,
+                             MPI_STATUS_IGNORE);
+                }
+            });
             send_thread.join();
             recv_thread.join();
-#endif
-#ifdef STATISTICS_BANDWIDTH
-            printf("SPARE partition %d , Time = %f s, Total Bytes = %llu, Bandwidth = %f GB/s\n",
-                   partition_id,
-                   total_sparse_slot_outgoing_adj_list_access_time,
-                   total_sparse_slot_outgoing_adj_list_bytes,
-                   (double)total_sparse_slot_outgoing_adj_list_bytes /
-                       total_sparse_slot_outgoing_adj_list_access_time / (1024 * 1024 * 1024));
-#endif
-            // 发送线程和计算均结束的时候
-            process_edge_time[1] = MPI_Wtime() + stream_time - process_edge_time[0];
-            delete[] recv_queue;
-        } else {
-            // dense selective bitmap
-            if (dense_selective != nullptr && partitions > 1) {   // 根本没被用到
-                double sync_time = 0;
-                sync_time -= get_time();
-                std::thread send_thread([&]() {
-                    for (int step = 1; step < partitions; step++) {
-                        int recipient_id = (partition_id + step) % partitions;
-                        MPI_Send(
-                            dense_selective->data + WORD_OFFSET(partition_offset[partition_id]),
-                            owned_vertices / 64,
-                            MPI_UNSIGNED_LONG,
-                            recipient_id,
-                            PassMessage,
-                            MPI_COMM_WORLD);
-                    }
-                });
-                std::thread recv_thread([&]() {
-                    for (int step = 1; step < partitions; step++) {
-                        int sender_id = (partition_id - step + partitions) % partitions;
-                        MPI_Recv(
-                            dense_selective->data + WORD_OFFSET(partition_offset[sender_id]),
-                            (partition_offset[sender_id + 1] - partition_offset[sender_id]) / 64,
-                            MPI_UNSIGNED_LONG,
-                            sender_id,
-                            PassMessage,
-                            MPI_COMM_WORLD,
-                            MPI_STATUS_IGNORE);
-                    }
-                });
-                send_thread.join();
-                recv_thread.join();
-                MPI_Barrier(MPI_COMM_WORLD);
-                sync_time += get_time();
-#ifdef PRINT_DEBUG_MESSAGES
-                if (partition_id == 0) {
-                    printf("sync_time = %lf\n", sync_time);
-                }
-#endif
-            }
+            MPI_Barrier(MPI_COMM_WORLD);
+            sync_time += get_time();
 #ifdef PRINT_DEBUG_MESSAGES
             if (partition_id == 0) {
-                printf("dense mode\n");
+                printf("sync_time = %lf\n", sync_time);
             }
 #endif
-            /*
-            稠密模式下不同的一点是提前创建了一个发送线程和一个接受线程，接受线程创建partitions-1个接受子线程。
-            发送线程顺序发送partitions-1个数据，等待dense_signal完成，完成一个partitions就发送一个
-            接受子线程一直MPI_RECV阻塞接受，然后接受线程顺序等待接受partitions-1个数据
-            每有一个partitions的数据被接受，就启动一个partitions的dense_slot
-            */
-            int* send_queue = new int[partitions];
-            int* recv_queue = new int[partitions];
-            volatile int send_queue_size = 0;
-            volatile int recv_queue_size = 0;
-            std::mutex send_queue_mutex;
-            std::mutex recv_queue_mutex;
+        }
+#ifdef PRINT_DEBUG_MESSAGES
+        if (partition_id == 0) {
+            printf("dense mode\n");
+        }
+#endif
+        /*
+        稠密模式下不同的一点是提前创建了一个发送线程和一个接受线程，接受线程创建partitions-1个接受子线程。
+        发送线程顺序发送partitions-1个数据，等待dense_signal完成，完成一个partitions就发送一个
+        接受子线程一直MPI_RECV阻塞接受，然后接受线程顺序等待接受partitions-1个数据
+        每有一个partitions的数据被接受，就启动一个partitions的dense_slot
+        */
+        int* send_queue = new int[partitions];
+        int* recv_queue = new int[partitions];
+        volatile int send_queue_size = 0;
+        volatile int recv_queue_size = 0;
+        std::mutex send_queue_mutex;
+        std::mutex recv_queue_mutex;
 
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-            std::thread comm_thread([&] {
-                // comm_time -= MPI_Wtime();
-                for (int step = 0; step < partitions - 1; step++) {
-                    while (true) {
-                        send_queue_mutex.lock();
-                        bool condition = (send_queue_size <= step);
-                        send_queue_mutex.unlock();
-                        if (!condition) break;
-                        __asm volatile("pause" ::: "memory");
-                    }
-                    int i = send_queue[step];
-                    for (int s_i = 0; s_i < sockets; s_i++) {
-                        if (!__sync_val_compare_and_swap(&length_array[i][partition_id][s_i],
-                                                         0,
-                                                         send_count[partition_id][i][s_i])) {
-                            // memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
-                            //        gim_send_buffer[partition_id][i][s_i]->data,
-                            //        sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+        std::thread comm_thread([&] {
+            // comm_time -= MPI_Wtime();
+            for (int step = 0; step < partitions - 1; step++) {
+                while (true) {
+                    send_queue_mutex.lock();
+                    bool condition = (send_queue_size <= step);
+                    send_queue_mutex.unlock();
+                    if (!condition) break;
+                    __asm volatile("pause" ::: "memory");
+                }
+                int i = send_queue[step];
+                for (int s_i = 0; s_i < sockets; s_i++) {
+                    if (!__sync_val_compare_and_swap(&length_array[i][partition_id][s_i],
+                                                     0,
+                                                     send_count[partition_id][i][s_i])) {
+                        // memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                        //        gim_send_buffer[partition_id][i][s_i]->data,
+                        //        sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
 
-                            if (sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
-                                hl_DMA_memcpy_sync_test(
-                                    (uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
-                                    (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
-                                    sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
-                                    partition_id);
-                            else
-                                memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
-                                       gim_send_buffer[partition_id][i][s_i]->data,
-                                       sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
-                            // INFO("{} to {} DENSE PUT SIZE IS
-                            // {}.",partition_id,i,sizeof(MsgUnit<M>) *
-                            // send_count[partition_id][i][s_i]);
+                        if (sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i] > DMA_SIZE)
+                            hl_DMA_memcpy_sync_test(
+                                (uint8_t*)gim_send_buffer[partition_id][i][s_i]->data,
+                                (uint8_t*)gim_recv_buffer[i][partition_id][s_i]->data,
+                                sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i],
+                                partition_id);
+                        else
+                            memcpy(gim_recv_buffer[i][partition_id][s_i]->data,
+                                   gim_send_buffer[partition_id][i][s_i]->data,
+                                   sizeof(MsgUnit<M>) * send_count[partition_id][i][s_i]);
+                        // INFO("{} to {} DENSE PUT SIZE IS
+                        // {}.",partition_id,i,sizeof(MsgUnit<M>) *
+                        // send_count[partition_id][i][s_i]);
 
-                            completion_tags[i][partition_id][s_i]->store(true,
-                                                                         std::memory_order_release);
-                        }
+                        completion_tags[i][partition_id][s_i]->store(true,
+                                                                     std::memory_order_release);
                     }
                 }
+            }
 #    ifdef GET
-                // std::vector<int> pending_buffer;
-                // std::queue<int> pending_buffer;
-                // for (int step = 1; step < partitions; step++) {
-                //     int i = (partition_id - step + partitions) % partitions;
-                //     // 首先判断是否available
-                //     if (!available[i][partition_id].load()) {
-                //         // 先记录下来
-                //         pending_buffer.push(i);
-                //         // pending_buffer.push_back(i);
-                //         continue;
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][partition_id][s_i] &&
-                //             !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
-                //                                          0,
-                //                                          send_count[i][partition_id][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][partition_id][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS
-                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
-                //             send_count[i][partition_id][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // std::vector<int> pending_buffer;
+            // std::queue<int> pending_buffer;
+            // for (int step = 1; step < partitions; step++) {
+            //     int i = (partition_id - step + partitions) % partitions;
+            //     // 首先判断是否available
+            //     if (!available[i][partition_id].load()) {
+            //         // 先记录下来
+            //         pending_buffer.push(i);
+            //         // pending_buffer.push_back(i);
+            //         continue;
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][partition_id][s_i] &&
+            //             !__sync_val_compare_and_swap(&length_array[partition_id][i][s_i],
+            //                                          0,
+            //                                          send_count[i][partition_id][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][partition_id][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+            //             // INFO("{} FROM {} DENSE FIRST GET SIZE IS
+            //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+            //             send_count[i][partition_id][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 
-                // for(auto i: pending_buffer){
-                //     while(!available[i][partition_id].load()){
-                //         __asm volatile("pause" ::: "memory");
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][partition_id][s_i] &&
-                //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0,
-                //                 send_count[i][partition_id][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][partition_id][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // for(auto i: pending_buffer){
+            //     while(!available[i][partition_id].load()){
+            //         __asm volatile("pause" ::: "memory");
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][partition_id][s_i] &&
+            //             !__sync_val_compare_and_swap(
+            //                 &length_array[partition_id][i][s_i], 0,
+            //                 send_count[i][partition_id][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][partition_id][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 
-                // while(!pending_buffer.empty()){
-                //     int i = pending_buffer.front();
-                //     pending_buffer.pop();
-                //     if (!available[i][partition_id].load()) {
-                //         pending_buffer.push(i);
-                //         continue;
-                //     }
-                //     for (int s_i = 0; s_i < sockets; s_i++) {
-                //         if (send_count[i][partition_id][s_i] &&
-                //             !__sync_val_compare_and_swap(
-                //                 &length_array[partition_id][i][s_i], 0,
-                //                 send_count[i][partition_id][s_i])) {
-                //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
-                //                    gim_send_buffer[i][partition_id][s_i]->data,
-                //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
-                //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS
-                //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
-                //             send_count[i][partition_id][s_i]);
-                //             completion_tags[partition_id][i][s_i]->store(true,
-                //                                                          std::memory_order_release);
-                //         }
-                //     }
-                // }
+            // while(!pending_buffer.empty()){
+            //     int i = pending_buffer.front();
+            //     pending_buffer.pop();
+            //     if (!available[i][partition_id].load()) {
+            //         pending_buffer.push(i);
+            //         continue;
+            //     }
+            //     for (int s_i = 0; s_i < sockets; s_i++) {
+            //         if (send_count[i][partition_id][s_i] &&
+            //             !__sync_val_compare_and_swap(
+            //                 &length_array[partition_id][i][s_i], 0,
+            //                 send_count[i][partition_id][s_i])) {
+            //             memcpy(gim_recv_buffer[partition_id][i][s_i]->data,
+            //                    gim_send_buffer[i][partition_id][s_i]->data,
+            //                    sizeof(MsgUnit<M>) * send_count[i][partition_id][s_i]);
+            //             // INFO("{} FROM {} DENSE SECOND GET SIZE IS
+            //             {}.",partition_id,i,sizeof(MsgUnit<M>) *
+            //             send_count[i][partition_id][s_i]);
+            //             completion_tags[partition_id][i][s_i]->store(true,
+            //                                                          std::memory_order_release);
+            //         }
+            //     }
+            // }
 #    endif
-                // comm_time += MPI_Wtime();
-            });
+            // comm_time += MPI_Wtime();
+        });
 #else
             std::thread send_thread([&]() {
                 for (int step = 0; step < partitions; step++) {
@@ -4412,15 +4486,14 @@ public:
                 recv_queue_mutex.unlock();
             });
 #endif
-            current_send_part_id = partition_id;
-            for (int step = 0; step < partitions; step++) {
-                current_send_part_id = (current_send_part_id + 1) % partitions;
-                global_current_send_part_id[partition_id] =
-                    current_send_part_id;   // 存疑，要不要锁
-                int i = current_send_part_id;
-                for (int t_i = 0; t_i < threads; t_i++) {
-                    *thread_state[t_i] = tuned_chunks_dense[i][t_i];
-                }
+        current_send_part_id = partition_id;
+        for (int step = 0; step < partitions; step++) {
+            current_send_part_id = (current_send_part_id + 1) % partitions;
+            global_current_send_part_id[partition_id] = current_send_part_id;   // 存疑，要不要锁
+            int i = current_send_part_id;
+            for (int t_i = 0; t_i < threads; t_i++) {
+                *thread_state[t_i] = tuned_chunks_dense[i][t_i];
+            }
 // 每个点对邻居执行dense_signal
 #ifdef STATISTICS_BANDWIDTH
 #    pragma omp parallel reduction(+ : total_dense_signal_incoming_adj_list_access_time, \
@@ -4428,28 +4501,36 @@ public:
 #else
 #    pragma omp parallel
 #endif
-                {
-                    double local_lambda_time = 0;
-                    unsigned long long local_lambda_bytes = 0;
-                    int thread_id = omp_get_thread_num();
-                    int s_i = get_socket_id(thread_id);
-                    VertexId final_p_v_i = thread_state[thread_id]->end;
-                    while (true) {
-                        // 线程开始从自己负责的部分开始获取任务
-                        VertexId begin_p_v_i =
-                            __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                        if (begin_p_v_i >= final_p_v_i) break;
-                        VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                        if (end_p_v_i > final_p_v_i) {
-                            end_p_v_i = final_p_v_i;
-                        }
-                        for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-                            VertexId v_i =
-                                compressed_incoming_adj_index[s_i][p_v_i]
-                                    .vertex;   // 对于s_i socket中的v_i，对所有邻居执行dense_signal
+            {
+                double local_lambda_time = 0;
+                unsigned long long local_lambda_bytes = 0;
+                int thread_id = omp_get_thread_num();
+                int s_i = get_socket_id(thread_id);
+                VertexId final_p_v_i = thread_state[thread_id]->end;
+                while (true) {
+                    // 线程开始从自己负责的部分开始获取任务
+                    VertexId begin_p_v_i =
+                        __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
+                    if (begin_p_v_i >= final_p_v_i) break;
+                    VertexId end_p_v_i = begin_p_v_i + basic_chunk;
+                    if (end_p_v_i > final_p_v_i) {
+                        end_p_v_i = final_p_v_i;
+                    }
+                    for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
+                        VertexId v_i =
+                            compressed_incoming_adj_index[s_i][p_v_i]
+                                .vertex;   // 对于s_i socket中的v_i，对所有邻居执行dense_signal
 #ifdef STATISTICS_BANDWIDTH
-                            double lambda_start_time = get_time();
+                        double lambda_start_time = get_time();
 #endif
+#ifdef COMPRESS
+                        dense_signal(v_i,
+                                     compressed_incoming_adj_list[s_i] +
+                                         compressed_incoming_adj_index[s_i][p_v_i].index,
+                                     compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                         compressed_incoming_adj_index[s_i][p_v_i].index,
+                                     -1);
+#else
                             dense_signal(
                                 v_i,
                                 VertexAdjList<EdgeData>(
@@ -4458,35 +4539,43 @@ public:
                                     incoming_adj_list[s_i] +
                                         compressed_incoming_adj_index[s_i][p_v_i + 1].index),
                                 -1);
-#ifdef STATISTICS_BANDWIDTH
-                            double lambda_end_time = get_time();
-                            local_lambda_time += (lambda_end_time - lambda_start_time);
-                            local_lambda_bytes +=
-                                (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
-                                 compressed_incoming_adj_index[s_i][p_v_i].index) *
-                                sizeof(AdjUnit<EdgeData>);
 #endif
-                        }
+#ifdef STATISTICS_BANDWIDTH
+                        double lambda_end_time = get_time();
+                        local_lambda_time += (lambda_end_time - lambda_start_time);
+                        local_lambda_bytes += (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                               compressed_incoming_adj_index[s_i][p_v_i].index) *
+                                              sizeof(AdjUnit<EdgeData>);
+#endif
                     }
-                    // 线程窃取
-                    thread_state[thread_id]->status = STEALING;
-                    __sync_fetch_and_add(&finished[partition_id][0], 1);
-                    for (int t_offset = 1; t_offset < threads; t_offset++) {
-                        int t_i = (thread_id + t_offset) % threads;
-                        int s_i = get_socket_id(t_i);
-                        while (thread_state[t_i]->status != STEALING) {
-                            VertexId begin_p_v_i =
-                                __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
-                            if (begin_p_v_i >= thread_state[t_i]->end) break;
-                            VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                            if (end_p_v_i > thread_state[t_i]->end) {
-                                end_p_v_i = thread_state[t_i]->end;
-                            }
-                            for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-                                VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
+                }
+                // 线程窃取
+                thread_state[thread_id]->status = STEALING;
+                __sync_fetch_and_add(&finished[partition_id][0], 1);
+                for (int t_offset = 1; t_offset < threads; t_offset++) {
+                    int t_i = (thread_id + t_offset) % threads;
+                    int s_i = get_socket_id(t_i);
+                    while (thread_state[t_i]->status != STEALING) {
+                        VertexId begin_p_v_i =
+                            __sync_fetch_and_add(&thread_state[t_i]->curr, basic_chunk);
+                        if (begin_p_v_i >= thread_state[t_i]->end) break;
+                        VertexId end_p_v_i = begin_p_v_i + basic_chunk;
+                        if (end_p_v_i > thread_state[t_i]->end) {
+                            end_p_v_i = thread_state[t_i]->end;
+                        }
+                        for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
+                            VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
 #ifdef STATISTICS_BANDWIDTH
-                                double lambda_start_time = get_time();
+                            double lambda_start_time = get_time();
 #endif
+#ifdef COMPRESS
+                            dense_signal(v_i,
+                                         compressed_incoming_adj_list[s_i] +
+                                             compressed_incoming_adj_index[s_i][p_v_i].index,
+                                         compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                             compressed_incoming_adj_index[s_i][p_v_i].index,
+                                         -1);
+#else
                                 dense_signal(
                                     v_i,
                                     VertexAdjList<EdgeData>(
@@ -4498,117 +4587,128 @@ public:
                                                                                1]   // s_i出边结束
                                                 .index),
                                     -1);
-#ifdef STATISTICS_BANDWIDTH
-                                double lambda_end_time = get_time();
-                                local_lambda_bytes +=
-                                    (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
-                                     compressed_incoming_adj_index[s_i][p_v_i].index) *
-                                    sizeof(AdjUnit<EdgeData>);
 #endif
-                            }
+#ifdef STATISTICS_BANDWIDTH
+                            double lambda_end_time = get_time();
+                            local_lambda_bytes +=
+                                (compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                 compressed_incoming_adj_index[s_i][p_v_i].index) *
+                                sizeof(AdjUnit<EdgeData>);
+#endif
                         }
                     }
-#ifdef STATISTICS_BANDWIDTH
-                    total_dense_signal_incoming_adj_list_access_time += local_lambda_time;
-                    total_dense_signal_incoming_adj_list_bytes += local_lambda_bytes;
-#endif
                 }
+#ifdef STATISTICS_BANDWIDTH
+                total_dense_signal_incoming_adj_list_access_time += local_lambda_time;
+                total_dense_signal_incoming_adj_list_bytes += local_lambda_bytes;
+#endif
+            }
 
-                // 全部执行完后再flush
+            // 全部执行完后再flush
 #pragma omp parallel for
-                for (int t_i = 0; t_i < threads; t_i++) {
-                    flush_local_send_buffer<M>(t_i);
-                }
+            for (int t_i = 0; t_i < threads; t_i++) {
+                flush_local_send_buffer<M>(t_i);
+            }
 
-                // 确保其他节点窃取的任务完成
-                while (stealingss[partition_id] != 0) {
-                    // printf("stealings:%d ,send_part:%d.%d\n",
-                    //        stealingss[partition_id],
-                    //        current_send_part_id,
-                    //        global_current_send_part_id[partition_id].load());
-                    __asm volatile("pause" ::: "memory");
-                }
+            // 确保其他节点窃取的任务完成
+            while (stealingss[partition_id] != 0) {
+                // printf("stealings:%d ,send_part:%d.%d\n",
+                //        stealingss[partition_id],
+                //        current_send_part_id,
+                //        global_current_send_part_id[partition_id].load());
+                __asm volatile("pause" ::: "memory");
+            }
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-                // send_count已经完成
-                // available[partition_id][current_send_part_id].store(true,
-                //                                                     std::memory_order_release);
+            // send_count已经完成
+            // available[partition_id][current_send_part_id].store(true,
+            //                                                     std::memory_order_release);
 #endif
 
-                // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
-                if (i != partition_id) {
-                    send_queue[send_queue_size] = i;
-                    send_queue_mutex.lock();
-                    send_queue_size += 1;
-                    send_queue_mutex.unlock();
-                }
+            // 这里是启动发送线程的关键，处理完一个分区就发送一个分区，其实和稀疏模式一样
+            if (i != partition_id) {
+                send_queue[send_queue_size] = i;
+                send_queue_mutex.lock();
+                send_queue_size += 1;
+                send_queue_mutex.unlock();
             }
-            if (finished[partition_id][0] != partitions * THREADS) {
-                printf("finished:%d\n", finished[partition_id][0]);
-            }
-            finished[partition_id][0] = partitions * THREADS;
-            // 全局工作窃取
+        }
+        if (finished[partition_id][0] != partitions * THREADS) {
+            printf("finished:%d\n", finished[partition_id][0]);
+        }
+        finished[partition_id][0] = partitions * THREADS;
+        // 全局工作窃取
 #ifdef GLOBAL_STEALING_DENSE
-            bool stealing_flag = true;
-            while (stealing_flag) {
-                int min = finished[partition_id][0];
-                int min_p = partition_id;
-                int finished_partition = 1;
+        bool stealing_flag = true;
+        while (stealing_flag) {
+            int min = finished[partition_id][0];
+            int min_p = partition_id;
+            int finished_partition = 1;
 
-                for (int step = 1; step < partitions; step++) {
-                    int i = (partition_id - step + partitions) % partitions;
-                    if (min > finished[i][0]) {
-                        min = finished[i][0];
-                        min_p = i;
-                    }
-                    if (finished[i][0] == finished[partition_id][0]) {
-                        finished_partition++;
-                    }
-                    if (finished_partition == partitions) {
-                        stealing_flag = false;
-                    }
+            for (int step = 1; step < partitions; step++) {
+                int i = (partition_id - step + partitions) % partitions;
+                if (min > finished[i][0]) {
+                    min = finished[i][0];
+                    min_p = i;
                 }
-                if (!stealing_flag) break;
-                __sync_fetch_and_add(&stealingss[min_p], 1);
-                //  stealings[i]++;
+                if (finished[i][0] == finished[partition_id][0]) {
+                    finished_partition++;
+                }
+                if (finished_partition == partitions) {
+                    stealing_flag = false;
+                }
+            }
+            if (!stealing_flag) break;
+            __sync_fetch_and_add(&stealingss[min_p], 1);
+            //  stealings[i]++;
 #    pragma omp parallel
-                {
-                    int thread_id = omp_get_thread_num();
+            {
+                int thread_id = omp_get_thread_num();
 
-                    for (int t_offset = 0; t_offset < threads; t_offset++) {
-                        int t_i = (thread_id + t_offset) % threads;
-                        while (gim_thread_state[min_p][t_i]->status != STEALING) {
-                            int s_i = get_socket_id(t_i);
-                            VertexId begin_p_v_i = __sync_fetch_and_add(
-                                &gim_thread_state[min_p][t_i]->curr, basic_chunk);
-                            if (begin_p_v_i >= gim_thread_state[min_p][t_i]->end) break;
-                            VertexId end_p_v_i = begin_p_v_i + basic_chunk;
-                            if (end_p_v_i > gim_thread_state[min_p][t_i]->end) {
-                                end_p_v_i = gim_thread_state[min_p][t_i]->end;
-                            }
-                            for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
-                                VertexId v_i =
-                                    gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].vertex;
-                                dense_signal(
-                                    v_i,
-                                    VertexAdjList<EdgeData>(
-                                        gim_incoming_adj_list[min_p][s_i] +
-                                            gim_compressed_incoming_adj_index[min_p][s_i][p_v_i]
-                                                .index,   // s_i出边开始
-                                        gim_incoming_adj_list[min_p][s_i] +
-                                            gim_compressed_incoming_adj_index[min_p][s_i][p_v_i + 1]
-                                                .index),
-                                    min_p);
-                            }
+                for (int t_offset = 0; t_offset < threads; t_offset++) {
+                    int t_i = (thread_id + t_offset) % threads;
+                    while (gim_thread_state[min_p][t_i]->status != STEALING) {
+                        int s_i = get_socket_id(t_i);
+                        VertexId begin_p_v_i =
+                            __sync_fetch_and_add(&gim_thread_state[min_p][t_i]->curr, basic_chunk);
+                        if (begin_p_v_i >= gim_thread_state[min_p][t_i]->end) break;
+                        VertexId end_p_v_i = begin_p_v_i + basic_chunk;
+                        if (end_p_v_i > gim_thread_state[min_p][t_i]->end) {
+                            end_p_v_i = gim_thread_state[min_p][t_i]->end;
+                        }
+                        for (VertexId p_v_i = begin_p_v_i; p_v_i < end_p_v_i; p_v_i++) {
+                            VertexId v_i =
+                                gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].vertex;
+#    ifdef COMPRESS
+                            dense_signal(
+                                v_i,
+                                gim_compressed_incoming_adj_list[min_p][s_i] +
+                                    gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].index,
+                                gim_compressed_incoming_adj_index[min_p][s_i][p_v_i + 1].index -
+                                    gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].index,
+                                min_p);
+#    else
+                            dense_signal(
+                                v_i,
+                                VertexAdjList<EdgeData>(
+                                    gim_incoming_adj_list[min_p][s_i] +
+                                        gim_compressed_incoming_adj_index[min_p][s_i][p_v_i]
+                                            .index,   // s_i出边开始
+                                    gim_incoming_adj_list[min_p][s_i] +
+                                        gim_compressed_incoming_adj_index[min_p][s_i][p_v_i + 1]
+                                            .index),
+                                min_p);
+#    endif
                         }
                     }
                 }
-#    pragma omp parallel for
-                for (int t_i = 0; t_i < threads; t_i++) {
-                    flush_local_send_buffer_to_other<M>(t_i, min_p);
-                }
-                // stealings[i]--;
-                __sync_fetch_and_add(&stealingss[min_p], -1);
             }
+#    pragma omp parallel for
+            for (int t_i = 0; t_i < threads; t_i++) {
+                flush_local_send_buffer_to_other<M>(t_i, min_p);
+            }
+            // stealings[i]--;
+            __sync_fetch_and_add(&stealingss[min_p], -1);
+        }
 //             for (int step = 1; step < partitions; step++) {
 //                 int i = (partition_id - step + partitions) % partitions;
 //                 // 怎么判断这个节点需不需要工作窃取
@@ -4659,29 +4759,29 @@ public:
 //             }
 #endif
 
-            process_edge_time[2] = MPI_Wtime() + stream_time;
+        process_edge_time[2] = MPI_Wtime() + stream_time;
 
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-            int expected_partition = partition_id + 1;
-            // 标记有接收自己的消息
-            completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
+        int expected_partition = partition_id + 1;
+        // 标记有接收自己的消息
+        completion_tags[partition_id][partition_id][0]->store(true, std::memory_order_relaxed);
 #endif
-            // dense_slot
-            for (int step = 0; step < partitions; step++) {
+        // dense_slot
+        for (int step = 0; step < partitions; step++) {
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-                while (true) {
-                    // 最先处理自己的消息
-                    expected_partition = (expected_partition - 1 + partitions) % partitions;
+            while (true) {
+                // 最先处理自己的消息
+                expected_partition = (expected_partition - 1 + partitions) % partitions;
 
-                    bool expected = true;
+                bool expected = true;
 
-                    // 只看第一个socket
-                    if (completion_tags[partition_id][expected_partition][0]
-                            ->compare_exchange_strong(expected, false))
-                        break;
-                }
+                // 只看第一个socket
+                if (completion_tags[partition_id][expected_partition][0]->compare_exchange_strong(
+                        expected, false))
+                    break;
+            }
 
-                int i = expected_partition;
+            int i = expected_partition;
 #else
                 while (true) {
                     recv_queue_mutex.lock();
@@ -4692,114 +4792,114 @@ public:
                 }   // 接受完一个就启动计算
                 int i = recv_queue[step];
 #endif
-                // MessageBuffer** used_buffer;
-                GIMMessageBuffer** used_buffer;
-                if (i == partition_id) {
-                    // used_buffer = send_buffer[i];
-                    used_buffer = gim_send_buffer[partition_id][i];
-                } else {
-                    // used_buffer = recv_buffer[i];
-                    used_buffer = gim_recv_buffer[partition_id][i];
+            // MessageBuffer** used_buffer;
+            GIMMessageBuffer** used_buffer;
+            if (i == partition_id) {
+                // used_buffer = send_buffer[i];
+                used_buffer = gim_send_buffer[partition_id][i];
+            } else {
+                // used_buffer = recv_buffer[i];
+                used_buffer = gim_recv_buffer[partition_id][i];
+            }
+            // 确定每个线程负责buffer的哪个部分
+            for (int t_i = 0; t_i < threads; t_i++) {
+                int s_i = get_socket_id(t_i);
+                while (i != partition_id && s_i &&
+                       !completion_tags[partition_id][i][s_i]->load(std::memory_order_relaxed)) {
+                    __asm volatile("pause" ::: "memory");
                 }
-                // 确定每个线程负责buffer的哪个部分
-                for (int t_i = 0; t_i < threads; t_i++) {
-                    int s_i = get_socket_id(t_i);
-                    while (
-                        i != partition_id && s_i &&
-                        !completion_tags[partition_id][i][s_i]->load(std::memory_order_relaxed)) {
-                        __asm volatile("pause" ::: "memory");
-                    }
-                    int s_j = get_socket_offset(t_i);
+                int s_j = get_socket_offset(t_i);
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-                    size_t buffer_size = (i == partition_id)
-                                             ? send_count[partition_id][partition_id][s_i]
-                                             : length_array[partition_id][i][s_i];
+                size_t buffer_size = (i == partition_id)
+                                         ? send_count[partition_id][partition_id][s_i]
+                                         : length_array[partition_id][i][s_i];
 #else
                     size_t buffer_size = (i == partition_id) ? send_count[partition_id][i][s_i]
                                                              : used_buffer[s_i]->count;
 #endif
-                    VertexId partition_size = buffer_size;
-                    thread_state[t_i]->curr =
-                        partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
-                    thread_state[t_i]->end =
-                        partition_size / threads_per_socket / basic_chunk * basic_chunk * (s_j + 1);
-                    if (s_j == threads_per_socket - 1) {
-                        thread_state[t_i]->end = buffer_size;
-                    }
-                    thread_state[t_i]->status = WORKING;
+                VertexId partition_size = buffer_size;
+                thread_state[t_i]->curr =
+                    partition_size / threads_per_socket / basic_chunk * basic_chunk * s_j;
+                thread_state[t_i]->end =
+                    partition_size / threads_per_socket / basic_chunk * basic_chunk * (s_j + 1);
+                if (s_j == threads_per_socket - 1) {
+                    thread_state[t_i]->end = buffer_size;
                 }
-#pragma omp parallel reduction(+ : reducer)
-                {
-                    R local_reducer = 0;
-                    int thread_id = omp_get_thread_num();
-                    int s_i = get_socket_id(thread_id);
-                    MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]->data;
-                    while (true) {
-                        // 线程开始从自己负责的部分开始获取任务
-                        VertexId b_i =
-                            __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                        if (b_i >= thread_state[thread_id]->end) break;
-                        VertexId begin_b_i = b_i;
-                        VertexId end_b_i = b_i + basic_chunk;
-                        if (end_b_i > thread_state[thread_id]->end) {
-                            end_b_i = thread_state[thread_id]->end;
-                        }
-                        for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
-                            VertexId v_i = buffer[b_i].vertex;
-                            M msg_data = buffer[b_i].msg_data;
-                            local_reducer += dense_slot(v_i, msg_data);   // 对每个vi执行dense_slot
-                        }
-                    }
-                    thread_state[thread_id]->status = STEALING;
-                    reducer += local_reducer;
-                }
+                thread_state[t_i]->status = WORKING;
             }
+#pragma omp parallel reduction(+ : reducer)
+            {
+                R local_reducer = 0;
+                int thread_id = omp_get_thread_num();
+                int s_i = get_socket_id(thread_id);
+                MsgUnit<M>* buffer = (MsgUnit<M>*)used_buffer[s_i]->data;
+                while (true) {
+                    // 线程开始从自己负责的部分开始获取任务
+                    VertexId b_i =
+                        __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
+                    if (b_i >= thread_state[thread_id]->end) break;
+                    VertexId begin_b_i = b_i;
+                    VertexId end_b_i = b_i + basic_chunk;
+                    if (end_b_i > thread_state[thread_id]->end) {
+                        end_b_i = thread_state[thread_id]->end;
+                    }
+                    for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
+                        VertexId v_i = buffer[b_i].vertex;
+                        M msg_data = buffer[b_i].msg_data;
+                        local_reducer += dense_slot(v_i, msg_data);   // 对每个vi执行dense_slot
+                    }
+                }
+                thread_state[thread_id]->status = STEALING;
+                reducer += local_reducer;
+            }
+        }
 #ifdef DENSE_MODE_UNIDIRECTIONAL
-            comm_thread.join();
+        comm_thread.join();
 #else
             send_thread.join();
             recv_thread.join();
 #endif
-            delete[] send_queue;
-            delete[] recv_queue;
-        }
-        process_edge_time[3] = MPI_Wtime() - process_edge_time[2] + stream_time;
-
-        stream_time += MPI_Wtime();
-        // 就是开始到目前结束的时间
-        total_process_time += stream_time;
-
-        // printf("partition_id: %d,process_edges took %lf (s)\n",partition_id, stream_time);
-        // printf("partition_id: %d,spare slot: %lf (s) ,spare signal :%lf (s),dense signal: %lf
-        // (s),dense slot: %lf (s)\n",partition_id,
-        // process_edge_time[0],process_edge_time[1],process_edge_time[2],process_edge_time[3]);
-
-        R global_reducer;
-        MPI_Datatype dt = get_mpi_data_type<R>();
-        MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
-#ifdef PRINT_DEBUG_MESSAGES
-        if (partition_id == 0) {
-            printf("process_edges took %lf (s)\n", stream_time);
-        }
-#endif
-        // if(is_first){
-        //     analyze_degree_distribution(DETAILED);
-        // }
-        if (is_first && partition_id == 0) {
-            // printf_data_info();
-            is_first = false;
-        }
-#ifdef STATISTICS_BANDWIDTH
-        printf("DENSE  partition %d , Time = %lf (s), Total Bytes = %llu, Bandwidth = %lf
-                   GB /
-                   s\n ", partition_id,
-                   total_dense_signal_incoming_adj_list_access_time,
-               total_dense_signal_incoming_adj_list_bytes,
-               (double)total_dense_signal_incoming_adj_list_bytes /
-                   total_dense_signal_incoming_adj_list_access_time / (1024 * 1024 * 1024));
-#endif
-        return global_reducer;
+        delete[] send_queue;
+        delete[] recv_queue;
     }
-};
+    process_edge_time[3] = MPI_Wtime() - process_edge_time[2] + stream_time;
+
+    stream_time += MPI_Wtime();
+    // 就是开始到目前结束的时间
+    total_process_time += stream_time;
+
+    // printf("partition_id: %d,process_edges took %lf (s)\n",partition_id, stream_time);
+    // printf("partition_id: %d,spare slot: %lf (s) ,spare signal :%lf (s),dense signal: %lf
+    // (s),dense slot: %lf (s)\n",partition_id,
+    // process_edge_time[0],process_edge_time[1],process_edge_time[2],process_edge_time[3]);
+
+    R global_reducer;
+    MPI_Datatype dt = get_mpi_data_type<R>();
+    MPI_Allreduce(&reducer, &global_reducer, 1, dt, MPI_SUM, MPI_COMM_WORLD);
+#ifdef PRINT_DEBUG_MESSAGES
+    if (partition_id == 0) {
+        printf("process_edges took %lf (s)\n", stream_time);
+    }
+#endif
+    // if(is_first){
+    //     analyze_degree_distribution(DETAILED);
+    // }
+    if (is_first && partition_id == 0) {
+        // printf_data_info();
+        is_first = false;
+    }
+#ifdef STATISTICS_BANDWIDTH
+    printf("DENSE  partition %d , Time = %lf (s), Total Bytes = %llu, Bandwidth = %lf
+               GB /
+               s\n ", partition_id,
+               total_dense_signal_incoming_adj_list_access_time,
+           total_dense_signal_incoming_adj_list_bytes,
+           (double)total_dense_signal_incoming_adj_list_bytes /
+               total_dense_signal_incoming_adj_list_access_time / (1024 * 1024 * 1024));
+#endif
+    return global_reducer;
+}
+}
+;
 
 #endif
