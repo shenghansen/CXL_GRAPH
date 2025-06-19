@@ -362,7 +362,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                     graph->emit_other(dst, sum, partition_id);
                 }
             },
-            #else
+#else
             [&](VertexId src, double msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
@@ -405,7 +405,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                     graph->emit_other(dst, sum, partition_id);
                 }
             },
-            #endif
+#endif
             [&](VertexId dst, double msg) {
                 if (!visited->get_bit(dst)) {
                     write_add(&dependencies[dst], msg);

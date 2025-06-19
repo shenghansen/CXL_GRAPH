@@ -2,6 +2,8 @@
 #define COMPRESS_HPP
 
 #include <algorithm>
+#include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +11,11 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
-
 #include <stdio.h>
 #include <string.h>
+#include <thread>
 
+#include "core/bitmap.hpp"
 #include "core/type.hpp"
 
 using namespace std;
@@ -21,10 +24,265 @@ using namespace std;
 #define new_remote(__E, __n, __node) (__E*)numa_alloc_onnode((__n) * sizeof(__E), __node)
 #define parallel_for _Pragma("omp parallel for") for
 
+template<class E> struct identityF {
+    E operator()(const E& x) { return x; }
+};
+
+template<class E> struct addF {
+    E operator()(const E& a, const E& b) const { return a + b; }
+};
+
+template<class E> struct minF {
+    E operator()(const E& a, const E& b) const { return (a < b) ? a : b; }
+};
+
+template<class E> struct maxF {
+    E operator()(const E& a, const E& b) const { return (a > b) ? a : b; }
+};
+
+struct nonMaxF {
+    bool operator()(uint& a) { return (a != UINT_MAX); }
+};
+
+// Sugar to pass in a single f and get a struct suitable for edgeMap.
+template<class F> struct EdgeMap_F {
+    F f;
+    EdgeMap_F(F& _f)
+        : f(_f) {}
+    inline bool update(const uint& s, const uint& d) { return f(s, d); }
+
+    inline bool updateAtomic(const uint& s, const uint& d) { return f(s, d); }
+
+    inline bool cond(const uint& d) const { return true; }
+};
+
 #define LAST_BIT_SET(b) (b & (0x80))
 #define EDGE_SIZE_PER_BYTE 7
 
 #define PARALLEL_DEGREE 1000
+
+#define _SCAN_LOG_BSIZE 10
+#define _SCAN_BSIZE (1 << _SCAN_LOG_BSIZE)
+
+template<class T> struct _seq {
+    T* A;
+    long n;
+    _seq() {
+        A = NULL;
+        n = 0;
+    }
+    _seq(T* _A, long _n)
+        : A(_A)
+        , n(_n) {}
+    void del() { free(A); }
+};
+
+namespace sequence {
+template<class intT> struct boolGetA {
+    bool* A;
+    boolGetA(bool* AA)
+        : A(AA) {}
+    intT operator()(intT i) { return (intT)A[i]; }
+};
+
+template<class ET, class intT> struct getA {
+    ET* A;
+    getA(ET* AA)
+        : A(AA) {}
+    ET operator()(intT i) { return A[i]; }
+};
+
+template<class IT, class OT, class intT, class F> struct getAF {
+    IT* A;
+    F f;
+    getAF(IT* AA, F ff)
+        : A(AA)
+        , f(ff) {}
+    OT operator()(intT i) { return f(A[i]); }
+};
+
+#define nblocks(_n, _bsize) (1 + ((_n) - 1) / (_bsize))
+
+#define blocked_for(_i, _s, _e, _bsize, _body)     \
+    {                                              \
+        intT _ss = _s;                             \
+        intT _ee = _e;                             \
+        intT _n = _ee - _ss;                       \
+        intT _l = nblocks(_n, _bsize);             \
+        parallel_for(intT _i = 0; _i < _l; _i++) { \
+            intT _s = _ss + _i * (_bsize);         \
+            intT _e = min(_s + (_bsize), _ee);     \
+            _body                                  \
+        }                                          \
+    }
+
+template<class OT, class intT, class F, class G> OT reduceSerial(intT s, intT e, F f, G g) {
+    OT r = g(s);
+    for (intT j = s + 1; j < e; j++) r = f(r, g(j));
+    return r;
+}
+
+template<class OT, class intT, class F, class G> OT reduce(intT s, intT e, F f, G g) {
+    intT l = nblocks(e - s, _SCAN_BSIZE);
+    if (l <= 1) return reduceSerial<OT>(s, e, f, g);
+    OT* Sums = newA(OT, l);
+    blocked_for(i, s, e, _SCAN_BSIZE, Sums[i] = reduceSerial<OT>(s, e, f, g););
+    OT r = reduce<OT>((intT)0, l, f, getA<OT, intT>(Sums));
+    free(Sums);
+    return r;
+}
+
+template<class OT, class intT, class F> OT reduce(OT* A, intT n, F f) {
+    return reduce<OT>((intT)0, n, f, getA<OT, intT>(A));
+}
+
+template<class OT, class intT> OT plusReduce(OT* A, intT n) {
+    return reduce<OT>((intT)0, n, addF<OT>(), getA<OT, intT>(A));
+}
+
+// g is the map function (applied to each element)
+// f is the reduce function
+// need to specify OT since it is not an argument
+template<class OT, class IT, class intT, class F, class G> OT mapReduce(IT* A, intT n, F f, G g) {
+    return reduce<OT>((intT)0, n, f, getAF<IT, OT, intT, G>(A, g));
+}
+
+template<class intT> intT sum(bool* In, intT n) {
+    return reduce<intT>((intT)0, n, addF<intT>(), boolGetA<intT>(In));
+}
+
+template<class ET, class intT, class F, class G>
+ET scanSerial(ET* Out, intT s, intT e, F f, G g, ET zero, bool inclusive, bool back) {
+    ET r = zero;
+    if (inclusive) {
+        if (back)
+            for (intT i = e - 1; i >= s; i--) Out[i] = r = f(r, g(i));
+        else
+            for (intT i = s; i < e; i++) Out[i] = r = f(r, g(i));
+    } else {
+        if (back)
+            for (intT i = e - 1; i >= s; i--) {
+                ET t = g(i);
+                Out[i] = r;
+                r = f(r, t);
+            }
+        else
+            for (intT i = s; i < e; i++) {
+                ET t = g(i);
+                Out[i] = r;
+                r = f(r, t);
+            }
+    }
+    return r;
+}
+
+template<class ET, class intT, class F> ET scanSerial(ET* In, ET* Out, intT n, F f, ET zero) {
+    return scanSerial(Out, (intT)0, n, f, getA<ET, intT>(In), zero, false, false);
+}
+
+// back indicates it runs in reverse direction
+template<class ET, class intT, class F, class G>
+ET scan(ET* Out, intT s, intT e, F f, G g, ET zero, bool inclusive, bool back) {
+    intT n = e - s;
+    intT l = nblocks(n, _SCAN_BSIZE);
+    if (l <= 2) return scanSerial(Out, s, e, f, g, zero, inclusive, back);
+    ET* Sums = newA(ET, nblocks(n, _SCAN_BSIZE));
+    blocked_for(i, s, e, _SCAN_BSIZE, Sums[i] = reduceSerial<ET>(s, e, f, g););
+    ET total = scan(Sums, (intT)0, l, f, getA<ET, intT>(Sums), zero, false, back);
+    blocked_for(i, s, e, _SCAN_BSIZE, scanSerial(Out, s, e, f, g, Sums[i], inclusive, back););
+    free(Sums);
+    return total;
+}
+
+template<class ET, class intT, class F> ET scan(ET* In, ET* Out, intT n, F f, ET zero) {
+    return scan(Out, (intT)0, n, f, getA<ET, intT>(In), zero, false, false);
+}
+
+template<class ET, class intT, class F> ET scanI(ET* In, ET* Out, intT n, F f, ET zero) {
+    return scan(Out, (intT)0, n, f, getA<ET, intT>(In), zero, true, false);
+}
+
+template<class ET, class intT, class F> ET scanBack(ET* In, ET* Out, intT n, F f, ET zero) {
+    return scan(Out, (intT)0, n, f, getA<ET, intT>(In), zero, false, true);
+}
+
+template<class ET, class intT, class F> ET scanIBack(ET* In, ET* Out, intT n, F f, ET zero) {
+    return scan(Out, (intT)0, n, f, getA<ET, intT>(In), zero, true, true);
+}
+
+template<class ET, class intT> ET plusScan(ET* In, ET* Out, intT n) {
+    return scan(Out, (intT)0, n, addF<ET>(), getA<ET, intT>(In), (ET)0, false, false);
+}
+
+#define _F_BSIZE (2 * _SCAN_BSIZE)
+
+// sums a sequence of n boolean flags
+// an optimized version that sums blocks of 4 booleans by treating
+// them as an integer
+// Only optimized when n is a multiple of 512 and Fl is 4byte aligned
+template<class intT> intT sumFlagsSerial(bool* Fl, intT n) {
+    intT r = 0;
+    if (n >= 128 && (n & 511) == 0 && ((long)Fl & 3) == 0) {
+        int* IFl = (int*)Fl;
+        for (int k = 0; k < (n >> 9); k++) {
+            int rr = 0;
+            for (int j = 0; j < 128; j++) rr += IFl[j];
+            r += (rr & 255) + ((rr >> 8) & 255) + ((rr >> 16) & 255) + ((rr >> 24) & 255);
+            IFl += 128;
+        }
+    } else
+        for (intT j = 0; j < n; j++) r += Fl[j];
+    return r;
+}
+
+template<class ET, class intT, class F>
+_seq<ET> packSerial(ET* Out, bool* Fl, intT s, intT e, F f) {
+    if (Out == NULL) {
+        intT m = sumFlagsSerial(Fl + s, e - s);
+        Out = newA(ET, m);
+    }
+    intT k = 0;
+    for (intT i = s; i < e; i++)
+        if (Fl[i]) Out[k++] = f(i);
+    return _seq<ET>(Out, k);
+}
+
+template<class ET, class intT, class F> _seq<ET> pack(ET* Out, bool* Fl, intT s, intT e, F f) {
+    intT l = nblocks(e - s, _F_BSIZE);
+    if (l <= 1) return packSerial(Out, Fl, s, e, f);
+    intT* Sums = newA(intT, l);
+    blocked_for(i, s, e, _F_BSIZE, Sums[i] = sumFlagsSerial(Fl + s, e - s););
+    intT m = plusScan(Sums, Sums, l);
+    if (Out == NULL) Out = newA(ET, m);
+    blocked_for(i, s, e, _F_BSIZE, packSerial(Out + Sums[i], Fl, s, e, f););
+    free(Sums);
+    return _seq<ET>(Out, m);
+}
+
+template<class ET, class intT> intT pack(ET* In, ET* Out, bool* Fl, intT n) {
+    return pack(Out, Fl, (intT)0, n, getA<ET, intT>(In)).n;
+}
+
+template<class intT> _seq<intT> packIndex(bool* Fl, intT n) {
+    return pack((intT*)NULL, Fl, (intT)0, n, identityF<intT>());
+}
+
+template<class ET, class intT, class PRED> intT filter(ET* In, ET* Out, bool* Fl, intT n, PRED p) {
+    parallel_for(intT i = 0; i < n; i++) Fl[i] = (bool)p(In[i]);
+    intT m = pack(In, Out, Fl, n);
+    return m;
+}
+
+template<class ET, class intT, class PRED> intT filter(ET* In, ET* Out, intT n, PRED p) {
+    bool* Fl = newA(bool, n);
+    intT m = filter(In, Out, Fl, n, p);
+    free(Fl);
+    return m;
+}
+
+}   // namespace sequence
+
+
 
 // for compress
 #define ONE_BYTE 256
@@ -38,11 +296,14 @@ using namespace std;
 #define THREE_BYTES_SIGNED_MIN -8388607
 
 template<typename EdgeData>
-void sort_adj_list(AdjUnit<EdgeData>** adj_list, EdgeId** adj_index, int socket, int n) {
-    for (size_t i = 0; i < socket; i++) {
-        for (size_t j = 0; j < n; j++) {
-            std::sort(&adj_list[i][adj_index[i][j]],
-                      &adj_list[i][adj_index[i][j + 1]],
+void sort_adj_list(Bitmap** adj_bitmap, AdjUnit<EdgeData>** adj_list, EdgeId** adj_index,
+                   int socket, int n) {
+    int finished = 0;
+    #pragma omp parallel for
+    for (size_t j = 0; j < n; j++) {
+        if (adj_bitmap[0]->get_bit(j)) {
+            std::sort(&adj_list[0][adj_index[0][j]],
+                      &adj_list[0][adj_index[0][j + 1]],
                       [](const AdjUnit<EdgeData>& a, const AdjUnit<EdgeData>& b) {
                           return a.neighbour < b.neighbour;
                       });
@@ -53,14 +314,13 @@ void sort_adj_list(AdjUnit<EdgeData>** adj_list, EdgeId** adj_index, int socket,
 template<typename EdgeData>
 void sort_adj_list(AdjUnit<EdgeData>** adj_list, CompressedAdjIndexUnit** compressed_adj_index,
                    VertexId* compressed_adj_vertices, int socket) {
-    for (size_t i = 0; i < socket; i++) {
-        for (size_t j = 0; j < compressed_adj_vertices[i]; j++) {
-            std::sort(&adj_list[i][compressed_adj_index[i][j].index],
-                      &adj_list[i][compressed_adj_index[i][j + 1].index],
-                      [](const AdjUnit<EdgeData>& a, const AdjUnit<EdgeData>& b) {
-                          return a.neighbour < b.neighbour;
-                      });
-        }
+#pragma omp parallel for
+    for (size_t j = 0; j < compressed_adj_vertices[0]; j++) {
+        std::sort(&adj_list[0][compressed_adj_index[0][j].index],
+                  &adj_list[0][compressed_adj_index[0][j + 1].index],
+                  [](const AdjUnit<EdgeData>& a, const AdjUnit<EdgeData>& b) {
+                      return a.neighbour < b.neighbour;
+                  });
     }
 }
 
@@ -448,7 +708,7 @@ adj_degree: the degree of each vertex
 socket: the number of sockets
 */
 template<typename EdgeData>
-uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list, EdgeId** adj_index, VertexId n,
+uint8_t** parallel_compress_edges(Bitmap** adj_bitmap, AdjUnit<EdgeData>** adj_list, EdgeId** adj_index, VertexId n,
                                   EdgeId* adj_edges, int socket, size_t* return_space) {
     uint8_t** finalArr = newA(uint8_t*, socket);
     for (int s_i = 0; s_i < socket; s_i++) {
@@ -458,25 +718,34 @@ uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list, EdgeId** adj_ind
         {
             parallel_for(long i = 0; i < n; i++) {
                 charsUsedArr[i] =
-                    sizeof(AdjUnit<EdgeData>) / 2 *
+                    sizeof(AdjUnit<EdgeData>) *
                     (ceil(((adj_index[s_i][i + 1] - adj_index[s_i][i]) * 9) / 8) + 4);   // todo
             }
         }
-        // long toAlloc = sequence::plusScan(charsUsedArr, charsUsedArr, n);
-        long toAlloc = std::reduce(std::execution::par,   // 并行执行
-                                   charsUsedArr,          // 指向数组开头的指针
-                                   charsUsedArr + n,      // 指向数组结尾的指针
-                                   (uint64_t)0);          // 初始值
-        std::exclusive_scan(std::execution::par,          // 并行执行
-                            charsUsedArr,                 // 输入范围开始
-                            charsUsedArr + n,             // 输入范围结束
-                            charsUsedArr,                 // 输出范围开始 (就地操作)
-                            (uint64_t)0);                 // 初始偏移为 0
+        long toAlloc = sequence::plusScan(charsUsedArr, charsUsedArr, n);
+        // long toAlloc = std::reduce(std::execution::par,   // 并行执行
+        //                            charsUsedArr,          // 指向数组开头的指针
+        //                            charsUsedArr + n,      // 指向数组结尾的指针
+        //                            (uint64_t)0);          // 初始值
+        // std::exclusive_scan(std::execution::par,          // 并行执行
+        //                     charsUsedArr,                 // 输入范围开始
+        //                     charsUsedArr + n,             // 输入范围结束
+        //                     charsUsedArr,                 // 输出范围开始 (就地操作)
+        //                     (uint64_t)0);                 // 初始偏移为 0
 
         uint32_t* iEdges = newA(uint32_t, toAlloc);
+        if (iEdges == NULL) {
+            cout << "Error allocating memory for iEdges" << endl;
+            exit(1);
+        }
         {
             parallel_for(long i = 0; i < n; i++) {
                 edgePts[i] = iEdges + charsUsedArr[i];
+                if (adj_bitmap[s_i]->get_bit(i) == false) {
+                    // if the vertex is not present in the bitmap, set charsUsed to 0
+                    charsUsedArr[i] = 0;
+                    continue;
+                }
                 long charsUsed =
                     sequential_compress_edgeset((uint8_t*)(iEdges + charsUsedArr[i]),
                                                 0,
@@ -488,14 +757,15 @@ uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list, EdgeId** adj_ind
         }
 
         // produce the total space needed for all compressed lists in chars.
-        // long totalSpace = sequence::plusScan(charsUsedArr, compressionStarts, n);
-        long totalSpace =
-            std::reduce(std::execution::par, charsUsedArr, charsUsedArr + n, (uint64_t)0);
-        std::exclusive_scan(std::execution::par,
-                            charsUsedArr,        // 输入范围开始
-                            charsUsedArr + n,    // 输入范围结束
-                            compressionStarts,   // <-- 输出范围开始 (不同的数组)
-                            (uint64_t)0);
+        long totalSpace = sequence::plusScan(charsUsedArr, compressionStarts, n);
+        // long totalSpace =
+        //     std::reduce(std::execution::par, charsUsedArr, charsUsedArr + n, (uint64_t)0);
+        // std::exclusive_scan(std::execution::par,
+        //                     charsUsedArr,        // 输入范围开始
+        //                     charsUsedArr + n,    // 输入范围结束
+        //                     compressionStarts,   // <-- 输出范围开始 (不同的数组)
+        //                     (uint64_t)0);
+
         compressionStarts[n] = totalSpace;
         free(charsUsedArr);
 
@@ -550,17 +820,7 @@ uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list,
                                    4);   // todo
             }
         }
-        // long toAlloc = sequence::plusScan(charsUsedArr, charsUsedArr, n);
-        long toAlloc = std::reduce(std::execution::par,   // 并行执行
-                                   charsUsedArr,          // 指向数组开头的指针
-                                   charsUsedArr + n,      // 指向数组结尾的指针
-                                   (uint64_t)0);          // 初始值
-        std::exclusive_scan(std::execution::par,          // 并行执行
-                            charsUsedArr,                 // 输入范围开始
-                            charsUsedArr + n,             // 输入范围结束
-                            charsUsedArr,                 // 输出范围开始 (就地操作)
-                            (uint64_t)0);                 // 初始偏移为 0
-
+        long toAlloc = sequence::plusScan(charsUsedArr, charsUsedArr, n);
         uint32_t* iEdges = newA(uint32_t, toAlloc);
         {
             parallel_for(long i = 0; i < n; i++) {
@@ -576,14 +836,7 @@ uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list,
         }
 
         // produce the total space needed for all compressed lists in chars.
-        // long totalSpace = sequence::plusScan(charsUsedArr, compressionStarts, n);
-        long totalSpace =
-            std::reduce(std::execution::par, charsUsedArr, charsUsedArr + n, (uint64_t)0);
-        std::exclusive_scan(std::execution::par,
-                            charsUsedArr,        // 输入范围开始
-                            charsUsedArr + n,    // 输入范围结束
-                            compressionStarts,   // <-- 输出范围开始 (不同的数组)
-                            (uint64_t)0);
+        long totalSpace = sequence::plusScan(charsUsedArr, compressionStarts, n);
         compressionStarts[n] = totalSpace;
         free(charsUsedArr);
 
@@ -600,6 +853,76 @@ uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list,
         }
         compressed_adj_index[s_i][n].index = totalSpace;
 
+        free(iEdges);
+        free(edgePts);
+        free(compressionStarts);
+        cout << "finished compressing, bytes used = " << totalSpace << endl;
+        cout << "would have been, " << (adj_edges[s_i] * sizeof(AdjUnit<EdgeData>)) << endl;
+    }
+    return finalArr;
+}
+
+
+/*
+adj_list: the adjacency list to compress
+compressed_adj_index: the compressed adjacency index
+n: number of vertices
+adj_edges: the edges in the adjacency list
+adj_degree: the degree of each vertex
+socket: the number of sockets
+*/
+template<typename EdgeData>
+uint8_t** parallel_compress_edges(AdjUnit<EdgeData>** adj_list, EdgeId** adj_index,
+                                  CompressedAdjIndexUnit** compressed_adj_index,
+                                  VertexId* compressed_adj_vertices, EdgeId* adj_edges, int socket,
+                                  size_t* return_space) {
+    uint8_t** finalArr = newA(uint8_t*, socket);
+    for (int s_i = 0; s_i < socket; s_i++) {
+        int n = compressed_adj_vertices[s_i];
+        uint32_t** edgePts = newA(uint32_t*, n);
+        uint64_t* charsUsedArr = newA(uint64_t, n);
+        EdgeId* compressionStarts = newA(EdgeId, n + 1);
+        {
+            parallel_for(long i = 0; i < n; i++) {
+                charsUsedArr[i] = sizeof(AdjUnit<EdgeData>) / 2 *
+                                  (ceil(((compressed_adj_index[s_i][i + 1].index -
+                                          compressed_adj_index[s_i][i].index) *
+                                         9) /
+                                        8) +
+                                   4);   // todo
+            }
+        }
+        long toAlloc = sequence::plusScan(charsUsedArr, charsUsedArr, n);
+        uint32_t* iEdges = newA(uint32_t, toAlloc);
+        {
+            parallel_for(long i = 0; i < n; i++) {
+                edgePts[i] = iEdges + charsUsedArr[i];
+                long charsUsed = sequential_compress_edgeset(
+                    (uint8_t*)(iEdges + charsUsedArr[i]),
+                    0,
+                    (compressed_adj_index[s_i][i + 1].index - compressed_adj_index[s_i][i].index),
+                    compressed_adj_index[s_i][i].vertex,
+                    adj_list[s_i] + compressed_adj_index[s_i][i].index);
+                charsUsedArr[i] = charsUsed;
+            }
+        }
+
+        // produce the total space needed for all compressed lists in chars.
+        long totalSpace = sequence::plusScan(charsUsedArr, compressionStarts, n);
+        compressionStarts[n] = totalSpace;
+        free(charsUsedArr);
+
+        finalArr[s_i] = newA(uint8_t, totalSpace);
+        return_space[s_i] = totalSpace;
+        cout << "total space requested is : " << totalSpace << endl;
+        {
+            parallel_for(long i = 0; i < n; i++) {
+                long o = compressionStarts[i];
+                memcpy(finalArr[s_i] + o, (uint8_t*)(edgePts[i]), compressionStarts[i + 1] - o);
+                adj_index[s_i][compressed_adj_index[s_i][i].vertex]= o;
+                adj_index[s_i][compressed_adj_index[s_i][i].vertex + 1] = compressionStarts[i + 1];
+            }
+        }
         free(iEdges);
         free(edgePts);
         free(compressionStarts);
@@ -656,6 +979,7 @@ void decode(OPT opt, uint8_t* edgeStart, const VertexId& source, const uint& deg
     if (degree > 0) {
         // Eat first edge, which is compressed specially
         VertexId startEdge = decode_first_edge(edgeStart, source);
+        // printf("startEdge: %d\n", startEdge);
         if constexpr (std::is_same<EdgeData, Empty>::value) {
             if (!opt(source, startEdge, 0, edgesRead)) {
                 return;
@@ -670,10 +994,13 @@ void decode(OPT opt, uint8_t* edgeStart, const VertexId& source, const uint& deg
         edgesRead = 1;
         if constexpr (std::is_same<EdgeData, Empty>::value) {
             while (1) {
+                // printf("edgesRead: %d, degree: %d\n", edgesRead, degree);
                 if (edgesRead == degree) return;
+                                  
                 uint8_t header = edgeStart[i++];
                 uint numbytes = 1 + (header & 0x3);
                 uint runlength = 1 + (header >> 2);
+                // printf("numbytes: %d, runlength: %d\n", numbytes, runlength);
                 switch (numbytes) {
                 case 1:
                     for (uint j = 0; j < runlength; j++) {

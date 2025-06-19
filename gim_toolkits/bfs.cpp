@@ -14,6 +14,8 @@ Copyright (c) 2014-2015 Xiaowei Zhu, Tsinghua University
    limitations under the License.
 */
 
+#include <cstdint>
+#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -30,6 +32,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
     // VertexSubset* visited = graph->alloc_vertex_subset();
     // VertexSubset* active_in = graph->alloc_vertex_subset();
     // VertexSubset* active_out = graph->alloc_vertex_subset();
+    MPI_Barrier(MPI_COMM_WORLD);
     VertexId** global_parent = graph->alloc_global_vertex_array<VertexId>();
     VertexSubset** global_visited = graph->alloc_global_vertex_subset();
     VertexSubset** global_active_in = graph->alloc_global_vertex_subset();
@@ -72,6 +75,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 int partition_id) {
                 if (partition_id == -1) {
                     VertexId activated = 0;
+                    // printf("partition: %d, src: %d, degree: %d\n", graph->partition_id, src, degree);
                     decode<Empty>(
                         [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
                             if (parent[dst] == graph->vertices &&
@@ -79,11 +83,13 @@ void compute(Graph<Empty>* graph, VertexId root) {
                                 active_out->set_bit(dst);
                                 activated += 1;
                             }
+                                // printf("partition: %d,degree:%d,src:%d, dst: %d,eageread: %d,activate:%d\n",graph->partition_id, degree, src, dst,edgeRead, activated);
                             return true;
                         },
                         compressed_list,
                         src,
                         degree);
+                        // printf("partition: %d, decode finished\n", graph->partition_id);
                     return activated;
                 } else {
                     VertexId activated = 0;
@@ -106,22 +112,27 @@ void compute(Graph<Empty>* graph, VertexId root) {
                 if (partition_id == -1) {
                     if (visited->get_bit(dst)) return;
                     decode<Empty>(
-                        [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
+                        [&](VertexId decode_dst, VertexId src, int weight, int edgeRead) -> bool {
                             if (active_in->get_bit(src)) {
-                                graph->emit(dst, src);
+                                graph->emit(decode_dst, src);
                                 return false;
                             }
+                            // if (graph->partition_id == 0) {
+                                // printf("partition: %d,degree:%d,dst:%d, src: %d,eageread: %d\n",graph->partition_id, degree, dst, src,edgeRead);
+                            // }
                             return true;
                         },
                         compressed_list,
                         dst,
                         degree);
+                    // printf("decode finished\n");
                 } else {
                     if (global_visited[partition_id]->get_bit(dst)) return;
                     decode<Empty>(
                         [&](VertexId dst, VertexId src, int weight, int edgeRead) -> bool {
                             if (global_active_in[partition_id]->get_bit(src)) {
                                 graph->emit_other(dst, src, partition_id);
+                                
                                 return false;
                             }
                             return true;
@@ -135,6 +146,7 @@ void compute(Graph<Empty>* graph, VertexId root) {
             [&](VertexId src, VertexId msg, VertexAdjList<Empty> outgoing_adj, int partition_id) {
                 if (partition_id == -1) {
                     VertexId activated = 0;
+                    // printf("partition: %d,src: %d, degree:%d\n", graph->partition_id,src, outgoing_adj.end - outgoing_adj.begin);
                     for (AdjUnit<Empty>* ptr = outgoing_adj.begin; ptr != outgoing_adj.end; ptr++) {
                         VertexId dst = ptr->neighbour;
                         CXL_PREFETCH
@@ -256,14 +268,13 @@ int main(int argc, char** argv) {
     VertexId root = std::atoi(argv[3]);
     VertexId vertices = std::atoi(argv[2]);
     std::string base_filename = argv[1];
-    bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
-    if (!loaded_from_preprocessed) {
+    // bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
+    // if (!loaded_from_preprocessed) {
         // if (graph->get_partition_id() == 0) {
         //     printf("Loading graph from original file: %s\n", base_filename.c_str());
         // }
         // 根据图是否有向或对称选择加载函数
         graph->load_directed(base_filename, vertices);   // 或者 load_undirected_from_directed
-
         // 可选：在第一次加载后保存预处理文件
         // if (graph->get_partition_id() == 0) {
         //      printf("Saving preprocessed graph data...\n");
@@ -272,10 +283,10 @@ int main(int argc, char** argv) {
         //  if (graph->get_partition_id() == 0) {
         //      printf("Finished saving preprocessed graph data.\n");
         // }
-    }
+    // }
 
     //   graph->load_directed(argv[1], std::atoi(argv[2]));
-
+ MPI_Barrier(MPI_COMM_WORLD);
     for (size_t i = 0; i < EXEC_TIMES; i++) {
         compute(graph, root);
     }
@@ -313,6 +324,6 @@ int main(int argc, char** argv) {
     }
 #endif
     //   delete graph;
-    _exit(0);
+    // _exit(0);
     return 0;
 }

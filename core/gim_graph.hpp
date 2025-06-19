@@ -17,6 +17,9 @@ Copyright (c) 2015-2016 Xiaowei Zhu, Tsinghua University
 #ifndef GRAPH_HPP
 #define GRAPH_HPP
 
+#include <cstdlib>
+#include <iterator>
+#include <sys/types.h>
 #if defined(SPARSE_MODE_UNIDIRECTIONAL) || defined(DENSE_MODE_UNIDIRECTIONAL)
 #    define UNIDIRECTIONAL_MODE
 #endif
@@ -329,6 +332,12 @@ public:
     uint8_t** compressed_incoming_adj_list;
     uint8_t*** gim_compressed_outgoing_adj_list;
     uint8_t*** gim_compressed_incoming_adj_list;
+    VertexId** outgoing_adj_degree;
+    VertexId** incoming_adj_degree;
+    VertexId*** gim_outgoing_adj_degree;
+    VertexId*** gim_incoming_adj_degree;
+    uint8_t** compressed_outgoing_adj_list_buffer;   //[sockets][threads][buffer_size]
+    uint8_t** compressed_incoming_adj_list_buffer;   // [sockets][threads][buffer_size]
 
     Graph() {
         // threads = numa_num_configured_cpus();
@@ -762,6 +771,229 @@ public:
     }
 
     void init_gim_buffer() {
+#ifdef COMPRESS
+        /* init degree */
+        gim_outgoing_adj_degree = new VertexId**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_outgoing_adj_degree[p_i] = new VertexId*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_outgoing_adj_degree[p_i][s_i] =
+                    (VertexId*)cxl_shm->GIM_malloc(sizeof(VertexId) * vertices, p_i, s_i);
+            }
+        }
+        outgoing_adj_degree = gim_outgoing_adj_degree[partition_id];
+        gim_incoming_adj_degree = new VertexId**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_incoming_adj_degree[p_i] = new VertexId*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_incoming_adj_degree[p_i][s_i] =
+                    (VertexId*)cxl_shm->GIM_malloc(sizeof(VertexId) * vertices, p_i, s_i);
+            }
+        }
+        incoming_adj_degree = gim_incoming_adj_degree[partition_id];
+
+        size_t* outgoing_adj_list_size = new size_t[sockets];
+        size_t* incoming_adj_list_size = new size_t[sockets];
+        VertexId max_outgoing_adj_degree = 0;
+        VertexId max_incoming_adj_degree = 0;
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            outgoing_adj_list_size[s_i] = outgoing_edges[s_i] * sizeof(AdjUnit<EdgeData>);
+            incoming_adj_list_size[s_i] = incoming_edges[s_i] * sizeof(AdjUnit<EdgeData>);
+            for (int i = 0; i < compressed_outgoing_adj_vertices[s_i]; i++) {
+                VertexId v = compressed_outgoing_adj_index[s_i][i].vertex;
+                outgoing_adj_degree[s_i][v] = compressed_outgoing_adj_index[s_i][i + 1].index -
+                                              compressed_outgoing_adj_index[s_i][i].index;
+                max_outgoing_adj_degree =
+                    std::max(max_outgoing_adj_degree, outgoing_adj_degree[s_i][v]);
+            }
+            for (int i = 0; i < compressed_incoming_adj_vertices[s_i]; i++) {
+                VertexId v = compressed_incoming_adj_index[s_i][i].vertex;
+                incoming_adj_degree[s_i][v] = compressed_incoming_adj_index[s_i][i + 1].index -
+                                              compressed_incoming_adj_index[s_i][i].index;
+                max_incoming_adj_degree =
+                    std::max(max_incoming_adj_degree, incoming_adj_degree[s_i][v]);
+            }
+        }
+        /* init adj_list */
+        gim_compressed_outgoing_adj_list = new uint8_t**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_outgoing_adj_list[p_i] = new uint8_t*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_outgoing_adj_list[p_i][s_i] =
+                    (uint8_t*)cxl_shm->CXL_SHM_malloc(outgoing_adj_list_size[s_i]);
+            }
+        }
+        gim_compressed_incoming_adj_list = new uint8_t**[partitions];
+        for (size_t p_i = 0; p_i < partitions; p_i++) {
+            gim_compressed_incoming_adj_list[p_i] = new uint8_t*[sockets];
+            for (size_t s_i = 0; s_i < sockets; s_i++) {
+                gim_compressed_incoming_adj_list[p_i][s_i] =
+                    (uint8_t*)cxl_shm->CXL_SHM_malloc(incoming_adj_list_size[s_i]);
+            }
+        }
+        // uint* padding = (uint*)cxl_shm->CXL_SHM_malloc(sizeof(uint) * incoming_adj_list_size[0]);
+
+        compressed_outgoing_adj_list = gim_compressed_outgoing_adj_list[partition_id];
+        compressed_incoming_adj_list = gim_compressed_incoming_adj_list[partition_id];
+        MPI_Barrier(MPI_COMM_WORLD);
+        compressed_outgoing_adj_list = new uint8_t*[sockets];
+        compressed_incoming_adj_list = new uint8_t*[sockets];
+        for (size_t s_i = 0; s_i < sockets; s_i++) {
+            compressed_outgoing_adj_list[s_i] =
+                (uint8_t*)numa_alloc_onnode(outgoing_adj_list_size[s_i], 4);
+            compressed_incoming_adj_list[s_i] =
+                (uint8_t*)numa_alloc_onnode(incoming_adj_list_size[s_i], 4);
+        }
+
+        /* compress */
+        if (partition_id == 0) {
+            // printf("[DEBUG] Starting parallel edge list sorting...\n");
+        }
+        // sort_adj_list(
+        //     outgoing_adj_bitmap, outgoing_adj_list, outgoing_adj_index, sockets, vertices);
+        sort_adj_list(outgoing_adj_list,
+                      compressed_outgoing_adj_index,
+                      compressed_outgoing_adj_vertices,
+                      sockets);
+
+        sort_adj_list(incoming_adj_list,
+                      compressed_incoming_adj_index,
+                      compressed_incoming_adj_vertices,
+                      sockets);
+
+        // Compress outgoing edges
+        if (partition_id == 0) {
+            // printf("[DEBUG] Starting parallel compression of outgoing edges...\n");
+        }
+
+        size_t* return_space = new size_t[sockets];
+        if (partition_id == 0) {
+            // printf("[DEBUG] Allocated return_space array for %d sockets\n", sockets);
+        }
+        // if (outgoing_adj_bitmap[0]->get_bit(1))
+        //     printf("partition_id=%d, outgoing 1 %d\n",
+        //            partition_id,
+        //            outgoing_adj_list[0][outgoing_adj_index[0][1]].neighbour);
+        // uint8_t** compressed_outgoing_ptr = parallel_compress_edges(outgoing_adj_bitmap,
+        //     outgoing_adj_list, outgoing_adj_index, vertices, outgoing_edges, sockets,
+        //     return_space);
+        uint8_t** compressed_outgoing_ptr =
+            parallel_compress_edges(outgoing_adj_list,
+                                    outgoing_adj_index,
+                                    compressed_outgoing_adj_index,
+                                    compressed_outgoing_adj_vertices,
+                                    outgoing_edges,
+                                    sockets,
+                                    return_space);
+        // if (partition_id == 0) {
+        // printf("[DEBUG] Parallel compression of outgoing edges completed\n");
+        // }
+        // for (int s_i = 0; s_i < sockets; s_i++) {
+        //     printf("partition_id=%d,compressed_outgoing_adj_list_size=%zu,compressed_incoming_adj_"
+        //            "list_size=%zu\n,return_space_size=%zu\n",
+        //            partition_id,
+        //            outgoing_adj_list_size[s_i],
+        //            incoming_adj_list_size[s_i],
+        //            return_space[s_i]);
+        // }
+
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            // if (partition_id == 0) {
+            //     printf("[DEBUG] Socket %d: copying %zu compressed outgoing bytes\n",
+            //            s_i,
+            //            return_space[s_i]);
+            // }
+            memcpy(compressed_outgoing_adj_list[s_i],
+                   compressed_outgoing_ptr[s_i],
+                   return_space[s_i] * sizeof(uint8_t));
+            // if (partition_id == 0) {
+            // printf("[DEBUG] Socket %d: outgoing edge compression copy completed\n", s_i);
+            // }
+        }
+        if (outgoing_adj_bitmap[0]->get_bit(1)) {
+            // printf("partition:%d,start:%p",
+            //        partition_id,
+            //        compressed_outgoing_adj_list[0] + outgoing_adj_index[0][1]);
+            decode<Empty>(
+                [&](VertexId src, VertexId dst, int weight, int edgeRead) -> bool {
+                    printf("[DEBUG]partition:%d Decoding edge: src=%u, dst=%u, weight=%d, "
+                           "edgeRead=%d,degree=%d\n",
+                           partition_id,
+                           src,
+                           dst,
+                           weight,
+                           edgeRead,
+                           outgoing_adj_degree[0][1]);
+                    return true;
+                },
+                compressed_outgoing_adj_list[0] + outgoing_adj_index[0][1],
+                1,
+                outgoing_adj_degree[0][1]);
+        }
+        // Compress incoming edges
+        // if (partition_id == 0) {
+        // printf("[DEBUG] Starting parallel compression of incoming edges...\n");
+        // }
+
+        uint8_t** compressed_incoming_ptr =
+            parallel_compress_edges(incoming_adj_list,
+                                    compressed_incoming_adj_index,
+                                    compressed_incoming_adj_vertices,
+                                    incoming_edges,
+                                    sockets,
+                                    return_space);
+
+        // uint8_t** compressed_incoming_ptr =
+        //     parallel_compress_edges(incoming_adj_list,
+        //                             incoming_adj_index,
+        //                             compressed_incoming_adj_index,
+        //                             compressed_incoming_adj_vertices,
+        //                             incoming_edges,
+        //                             sockets,
+        //                             return_space);
+
+        if (partition_id == 0) {
+            // printf("[DEBUG] Parallel compression of incoming edges completed\n");
+        }
+
+        for (int s_i = 0; s_i < sockets; s_i++) {
+            // if (partition_id == 0) {
+            //     printf("[DEBUG] Socket %d: copying %zu compressed incoming bytes\n",
+            //            s_i,
+            //            return_space[s_i]);
+            // }
+            memcpy(compressed_incoming_adj_list[s_i],
+                   compressed_incoming_ptr[s_i],
+                   return_space[s_i] * sizeof(uint8_t));
+            // if (partition_id == 0) {
+            // printf("[DEBUG] Socket %d: incoming edge compression copy completed\n", s_i);
+            // }
+        }
+
+        // if (partition_id == 0) {
+        // printf("[DEBUG] All compression operations completed successfully\n");
+        // }
+
+        delete[] return_space;
+        if (partition_id == 0) {
+            // printf("[DEBUG] Cleaned up return_space array\n");
+        }
+        printf("max_outgoing_adj_degree=%d, max_incoming_adj_degree=%d\n",
+               max_outgoing_adj_degree,
+               max_incoming_adj_degree);
+
+        /* buffer */
+        compressed_outgoing_adj_list_buffer = new uint8_t*[threads];
+        compressed_incoming_adj_list_buffer = new uint8_t*[threads];
+        for (int t_i = 0; t_i < threads; t_i++) {
+            compressed_outgoing_adj_list_buffer[t_i] =
+                (uint8_t*)numa_alloc_onnode(max_outgoing_adj_degree * sizeof(AdjUnit<EdgeData>),
+                                            get_real_numa_id(t_i, partition_id));
+            compressed_incoming_adj_list_buffer[t_i] =
+                (uint8_t*)numa_alloc_onnode(max_incoming_adj_degree * sizeof(AdjUnit<EdgeData>),
+                                            get_real_numa_id(t_i, partition_id));
+        }
+#endif
 
         /* gim version send_buffer init */
         size_t max_owned_vertices = 0;
@@ -824,50 +1056,6 @@ public:
             }
         }
         /* compressed list init */
-        gim_compressed_outgoing_adj_list = new uint8_t**[partitions];
-        for (size_t p_i = 0; p_i < partitions; p_i++) {
-            gim_compressed_outgoing_adj_list[p_i] = new uint8_t*[sockets];
-            for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_compressed_outgoing_adj_list[p_i][s_i] = (uint8_t*)cxl_shm->CXL_SHM_malloc(
-                    outgoing_adj_list_global_max * sizeof(uint8_t));
-            }
-        }
-        gim_compressed_incoming_adj_list = new uint8_t**[partitions];
-        for (size_t p_i = 0; p_i < partitions; p_i++) {
-            gim_compressed_incoming_adj_list[p_i] = new uint8_t*[sockets];
-            for (size_t s_i = 0; s_i < sockets; s_i++) {
-                gim_compressed_incoming_adj_list[p_i][s_i] = (uint8_t*)cxl_shm->CXL_SHM_malloc(
-                    incoming_adj_list_global_max * sizeof(uint8_t));
-            }
-        }
-        compressed_outgoing_adj_list = gim_compressed_outgoing_adj_list[partition_id];
-        compressed_incoming_adj_list = gim_compressed_incoming_adj_list[partition_id];
-        /* compress */
-        sort_adj_list(outgoing_adj_list, outgoing_adj_index, sockets, vertices);
-        sort_adj_list(incoming_adj_list,
-                      compressed_incoming_adj_index,
-                      compressed_incoming_adj_vertices,
-                      sockets);
-        size_t* return_space = new size_t[sockets];
-        uint8_t** compressed_outgoing_ptr = parallel_compress_edges(
-            outgoing_adj_list, outgoing_adj_index, vertices, outgoing_edges, sockets, return_space);
-        for (int s_i = 0; s_i < sockets; s_i++) {
-            memcpy(compressed_outgoing_adj_list[s_i],
-                   compressed_outgoing_ptr[s_i],
-                   return_space[s_i] * sizeof(uint8_t));
-        }
-        uint8_t** compressed_incoming_ptr =
-            parallel_compress_edges(incoming_adj_list,
-                                    compressed_incoming_adj_index,
-                                    compressed_incoming_adj_vertices,
-                                    incoming_edges,
-                                    sockets,
-                                    return_space);
-        for (int s_i = 0; s_i < sockets; s_i++) {
-            memcpy(compressed_incoming_adj_list[s_i],
-                   compressed_incoming_ptr[s_i],
-                   return_space[s_i] * sizeof(uint8_t));
-        }
     }
 
     double print_total_process_time() { return total_process_time; }
@@ -1776,6 +1964,7 @@ public:
         MPI_Barrier(MPI_COMM_WORLD);
         outgoing_adj_list = gim_outgoing_adj_list[partition_id];
 
+
         compressed_outgoing_adj_vertices = new VertexId[sockets];
         gim_compressed_outgoing_adj_index = new CompressedAdjIndexUnit**[partitions];
         for (size_t p_i = 0; p_i < partitions; p_i++) {
@@ -2363,6 +2552,11 @@ public:
             }
         }
         outgoing_adj_list = gim_outgoing_adj_list[partition_id];
+        outgoing_adj_list = new AdjUnit<EdgeData>*[sockets];
+        for (size_t s_i = 0; s_i < sockets; s_i++) {
+            outgoing_adj_list[s_i] = (AdjUnit<EdgeData>*)numa_alloc_onnode(
+                unit_size * outgoing_edges[s_i], s_i + partition_id * NUMA);
+        }
         outgoing_adj_list_global_max = global_max;
         // calculate size
         data_size["outgoing_adj_list"] = outgoing_adj_list_size;
@@ -3363,7 +3557,6 @@ public:
                     Bitmap* dense_selective = nullptr) {
 #endif
         double stream_time = 0;
-
     stream_time -= MPI_Wtime();
     for (int i = 0; i < 4; i++) {
         process_edge_time[i] = 0;
@@ -3380,7 +3573,7 @@ public:
         [&](VertexId vtx) { return (EdgeId)out_degree[vtx]; }, active);
     bool sparse = (active_edges < edges / 20);
 
-    // if (partition_id == 0) printf("spare:%d\n", sparse);
+    if (partition_id == 0) printf("spare:%d\n", sparse);
     size_t send_buffer_size = 0;
     size_t recv_buffer_size = 0;
     finished[partition_id][0] = 0;
@@ -3930,6 +4123,8 @@ public:
                             : used_buffer[s_i]->count;   // send_buffer[i][s_i]->count 第i个host
                                                          // s_i个socket的buffersize
 #endif
+                // printf("[DEBUG]partition_id %d i %d s_i %d buffer_size %zu\n",
+                //                    partition_id, i, s_i, buffer_size);
                 for (int t_i = 0; t_i < threads; t_i++) {   // 遍历所有线程
                     // 确定每个线程负责buffer的哪个部分,每个socket内的线程分工，不同socket的线程可能处理同样的任务
                     //  int s_i = get_socket_id(t_i);
@@ -3957,34 +4152,77 @@ public:
                     unsigned long long local_lambda_bytes = 0;
                     int thread_id = omp_get_thread_num();
                     int s_i = get_socket_id(thread_id);
+
                     // 执行sparse_slot
                     while (true) {
                         // 线程开始从自己负责的部分开始获取任务
                         VertexId b_i =
                             __sync_fetch_and_add(&thread_state[thread_id]->curr, basic_chunk);
-                        if (b_i >= thread_state[thread_id]->end) break;
+
+                        // if (thread_id == 31)
+                        //     printf("[DEBUG]partition_id %d thread_id %d b_i %u end %u\n",
+                        //            partition_id,
+                        //            thread_id,
+                        //            b_i,
+                        //            thread_state[thread_id]->end);
+                        if (b_i >= thread_state[thread_id]->end) {
+                            // printf("[DEBUG]partition_id %d thread_id %d "
+                            //        "b_i %u >= end %u, break\n",
+                            //        partition_id,
+                            //        thread_id,
+                            //        b_i,
+                            //        thread_state[thread_id]->end);
+                            break;
+                        }
+
                         VertexId begin_b_i = b_i;
                         VertexId end_b_i = b_i + basic_chunk;
                         if (end_b_i > thread_state[thread_id]->end) {
                             end_b_i = thread_state[thread_id]->end;
                         }
+                        // printf("[DEBUG]partition_id %d thread_id %d "
+                        //        "begin_b_i %u end_b_i %u\n",
+                        //        partition_id,
+                        //        thread_id,
+                        //        begin_b_i,
+                        //        end_b_i);
                         // 获取到basic_chunk个任务后，如果buffer里面点在线程所属numa(二级分区)内，就需要执行sparse_slot
                         for (b_i = begin_b_i; b_i < end_b_i; b_i++) {
                             VertexId v_i = buffer[b_i].vertex;
                             M msg_data = buffer[b_i].msg_data;
+                            // printf("[DEBUG]partition_id %d thread_id %d v_i %u "
+                            //        "outgoing_adj_bitmap[%d]->get_bit(v_i) is false\n",
+                            //        partition_id,
+                            //        thread_id,
+                            //        v_i,
+                            //        s_i);
                             if (outgoing_adj_bitmap[s_i]->get_bit(
                                     v_i)) {   // 如果v_i在s_i socket内有出边
 #ifdef STATISTICS_BANDWIDTH
                                 double lambda_start_time = get_time();
 #endif
 #ifdef COMPRESS
-                                local_reducer += sparse_slot(
-                                    v_i,
-                                    msg_data,
-                                    compressed_outgoing_adj_list[s_i] +
-                                        outgoing_adj_index[s_i][v_i],   // s_i内v_i的出边开始,
-                                    outgoing_adj_index[s_i][v_i + 1] - outgoing_adj_index[s_i][v_i],
-                                    -1);   // s_i内v_i的出边结束
+#    ifdef MEMCPY
+                                memcpy(compressed_outgoing_adj_list_buffer[thread_id],
+                                       compressed_outgoing_adj_list[s_i] +
+                                           outgoing_adj_index[s_i][v_i],
+                                       outgoing_adj_index[s_i][v_i+1]-
+                                           outgoing_adj_index[s_i][v_i]);
+                                local_reducer +=
+                                    sparse_slot(v_i,
+                                                msg_data,
+                                                compressed_outgoing_adj_list_buffer
+                                                    [thread_id],   // s_i内v_i的出边开始,
+                                                outgoing_adj_degree[s_i][v_i],
+                                                -1);   // s_i内v_i的出边结束
+#    else
+                                sparse_slot(v_i,
+                                            msg_data,
+                                            compressed_outgoing_adj_list[s_i] +
+                                                outgoing_adj_index[s_i][v_i],
+                                            outgoing_adj_degree[s_i][v_i],
+                                            -1);   // s_i内v_i的出边结束
+#    endif
 #else
                                     local_reducer += sparse_slot(
                                         v_i,
@@ -4008,6 +4246,8 @@ public:
                             }
                         }
                     }
+                    // MPI_Barrier(MPI_COMM_WORLD);
+                    // printf("partition_id %d sparse slot finished\n", partition_id);
                     // 工作窃取
                     thread_state[thread_id]->status = STEALING;
                     for (int t_offset = 1; t_offset < threads; t_offset++) {
@@ -4031,13 +4271,26 @@ public:
                                     double lambda_start_time = get_time();
 #endif
 #ifdef COMPRESS
-                                    local_reducer += sparse_slot(v_i,
-                                                                 msg_data,
-                                                                 compressed_outgoing_adj_list[s_i] +
-                                                                     outgoing_adj_index[s_i][v_i],
-                                                                 outgoing_adj_index[s_i][v_i + 1] -
-                                                                     outgoing_adj_index[s_i][v_i],
-                                                                 i);
+#    ifdef MEMCPY
+                                    memcpy(compressed_outgoing_adj_list_buffer[thread_id],
+                                           compressed_outgoing_adj_list[s_i] +
+                                               outgoing_adj_index[s_i][v_i],
+                                           outgoing_adj_index[s_i][v_i + 1] -
+                                               outgoing_adj_index[s_i][v_i]);
+                                    local_reducer +=
+                                        sparse_slot(v_i,
+                                                    msg_data,
+                                                    compressed_outgoing_adj_list_buffer[thread_id],
+                                                    outgoing_adj_degree[s_i][v_i],
+                                                    -1);
+#    else
+                                    sparse_slot(v_i,
+                                                msg_data,
+                                                compressed_outgoing_adj_list[s_i] +
+                                                    outgoing_adj_index[s_i][v_i],
+                                                outgoing_adj_degree[s_i][v_i],
+                                                -1);
+#    endif
 #else
                                         local_reducer += sparse_slot(
                                             v_i,
@@ -4524,12 +4777,23 @@ public:
                         double lambda_start_time = get_time();
 #endif
 #ifdef COMPRESS
+#    ifdef MEMCPY
+                        memcpy(compressed_incoming_adj_list_buffer[thread_id],
+                               compressed_incoming_adj_list[s_i] +
+                                   compressed_incoming_adj_index[s_i][p_v_i].index,
+                               compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                   compressed_incoming_adj_index[s_i][p_v_i].index);
+                        dense_signal(v_i,
+                                     compressed_incoming_adj_list_buffer[thread_id],
+                                     incoming_adj_degree[s_i][v_i],
+                                     -1);
+#    else
                         dense_signal(v_i,
                                      compressed_incoming_adj_list[s_i] +
                                          compressed_incoming_adj_index[s_i][p_v_i].index,
-                                     compressed_incoming_adj_index[s_i][p_v_i + 1].index -
-                                         compressed_incoming_adj_index[s_i][p_v_i].index,
+                                     incoming_adj_degree[s_i][v_i],
                                      -1);
+#    endif
 #else
                             dense_signal(
                                 v_i,
@@ -4569,12 +4833,23 @@ public:
                             double lambda_start_time = get_time();
 #endif
 #ifdef COMPRESS
+#    ifdef MEMCPY
+                            memcpy(compressed_incoming_adj_list_buffer[t_i],
+                                   compressed_incoming_adj_list[s_i] +
+                                       compressed_incoming_adj_index[s_i][p_v_i].index,
+                                   compressed_incoming_adj_index[s_i][p_v_i + 1].index -
+                                       compressed_incoming_adj_index[s_i][p_v_i].index);
+                            dense_signal(v_i,
+                                         compressed_incoming_adj_list_buffer[t_i],
+                                         incoming_adj_degree[s_i][v_i],
+                                         -1);
+#    else
                             dense_signal(v_i,
                                          compressed_incoming_adj_list[s_i] +
                                              compressed_incoming_adj_index[s_i][p_v_i].index,
-                                         compressed_incoming_adj_index[s_i][p_v_i + 1].index -
-                                             compressed_incoming_adj_index[s_i][p_v_i].index,
+                                         incoming_adj_degree[s_i][v_i],
                                          -1);
+#    endif
 #else
                                 dense_signal(
                                     v_i,
@@ -4583,9 +4858,8 @@ public:
                                             compressed_incoming_adj_index[s_i][p_v_i]
                                                 .index,   // s_i出边开始
                                         incoming_adj_list[s_i] +
-                                            compressed_incoming_adj_index[s_i][p_v_i +
-                                                                               1]   // s_i出边结束
-                                                .index),
+                                            compressed_incoming_adj_index[s_i][p_v_i + 1]  
+                                            .index),
                                     -1);
 #endif
 #ifdef STATISTICS_BANDWIDTH
@@ -4683,8 +4957,7 @@ public:
                                 v_i,
                                 gim_compressed_incoming_adj_list[min_p][s_i] +
                                     gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].index,
-                                gim_compressed_incoming_adj_index[min_p][s_i][p_v_i + 1].index -
-                                    gim_compressed_incoming_adj_index[min_p][s_i][p_v_i].index,
+                                gim_incoming_adj_degree[min_p][s_i][v_i],
                                 min_p);
 #    else
                             dense_signal(
