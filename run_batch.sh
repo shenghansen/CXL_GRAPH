@@ -1,6 +1,6 @@
 echo "Running batch script"
 sudo accel-config config-user-default 
-output_log="output.log.59"
+output_log="output.log.65"
 if [ -f "$output_log" ]; then
     echo "Removing existing output log file: $output_log"
     rm "$output_log"

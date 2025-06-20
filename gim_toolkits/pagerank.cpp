@@ -266,8 +266,8 @@ int main(int argc, char** argv) {
     VertexId vertices = std::atoi(argv[2]);
     std::string base_filename = argv[1];
     // bool loaded_from_preprocessed = graph->load_preprocessed_graph_mmap(base_filename);
-    bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
-    if (!loaded_from_preprocessed) {
+    // bool loaded_from_preprocessed = graph->load_preprocessed_graph(base_filename);
+    // if (!loaded_from_preprocessed) {
         // if (graph->get_partition_id() == 0) {
         //     printf("Loading graph from original file: %s\n", base_filename.c_str());
         // }
@@ -282,7 +282,7 @@ int main(int argc, char** argv) {
         // if (graph->get_partition_id() == 0) {
         //     printf("Finished saving preprocessed graph data.\n");
         // }
-    }
+    // }
     // graph->load_directed(argv[1], std::atoi(argv[2]));
     int iterations = std::atoi(argv[3]);
     for (size_t i = 0; i < EXEC_TIMES; i++) {

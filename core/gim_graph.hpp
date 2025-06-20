@@ -2065,11 +2065,13 @@ public:
         for (size_t p_i = 0; p_i < partitions; p_i++) {
             gim_outgoing_adj_index[p_i] = new EdgeId*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
-                // gim_outgoing_adj_index[p_i][s_i] =
-                //     (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
-
+#ifdef DCXL_ALL
+                gim_outgoing_adj_index[p_i][s_i] =
+                    (EdgeId*)cxl_shm->CXL_SHM_malloc(sizeof(EdgeId) * (vertices + 1));
+#else
                 gim_outgoing_adj_index[p_i][s_i] = (EdgeId*)numa_alloc_onnode(
                     sizeof(EdgeId) * (vertices + 1), s_i + partition_id * NUMA);
+#endif
             }
         }
         outgoing_adj_index = gim_outgoing_adj_index[partition_id];
@@ -2582,8 +2584,13 @@ public:
             gim_compressed_incoming_adj_index[p_i] = new CompressedAdjIndexUnit*[sockets];
             for (size_t s_i = 0; s_i < sockets; s_i++) {
                 gim_compressed_incoming_adj_index[p_i][s_i] =
+#ifdef DCXL_ALL
                     (CompressedAdjIndexUnit*)cxl_shm->CXL_SHM_malloc(
                         (global_max + 1) * sizeof(CompressedAdjIndexUnit));
+#else
+                    (CompressedAdjIndexUnit*)numa_alloc_onnode(
+                        (global_max + 1) * sizeof(CompressedAdjIndexUnit), s_i + partition_id * NUMA);
+#endif
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -2770,15 +2777,16 @@ public:
         }
         MPI_Barrier(MPI_COMM_WORLD);
         // copy gim_compressed_incoming_adj_index
-        compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
-        for (size_t s_i = 0; s_i < sockets; s_i++) {
-            compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
-                (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit),
-                s_i + partition_id * NUMA);
-            memcpy(compressed_incoming_adj_index[s_i],
-                   gim_compressed_incoming_adj_index[partition_id][s_i],
-                   (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit));
-        }
+        // compressed_incoming_adj_index = new CompressedAdjIndexUnit*[sockets];
+        // for (size_t s_i = 0; s_i < sockets; s_i++) {
+        //     compressed_incoming_adj_index[s_i] = (CompressedAdjIndexUnit*)numa_alloc_onnode(
+        //         (compressed_incoming_adj_index_global_max + 1) * sizeof(CompressedAdjIndexUnit),
+        //         s_i + partition_id * NUMA);
+        //     memcpy(compressed_incoming_adj_index[s_i],
+        //            gim_compressed_incoming_adj_index[partition_id][s_i],
+        //            (compressed_incoming_adj_index_global_max + 1) *
+        //            sizeof(CompressedAdjIndexUnit));
+        // }
 
         delete[] buffered_edges;
         delete[] send_buffer;
